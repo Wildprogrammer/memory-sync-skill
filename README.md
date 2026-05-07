@@ -1,0 +1,159 @@
+# Memory Sync Skill
+
+> A local-first memory layer that turns agent conversations into an Obsidian-backed, Git-versioned, cross-agent knowledge base.
+
+[![Version](https://img.shields.io/badge/version-v2-blue)](#)
+[![Local First](https://img.shields.io/badge/local--first-yes-brightgreen)](#)
+[![Obsidian](https://img.shields.io/badge/storage-Obsidian-purple)](#)
+[![License](https://img.shields.io/badge/license-MIT-lightgrey)](LICENSE)
+
+Memory Sync helps AI agents remember at the right time, understand the user better, and carry useful context across tools like OpenClaw, Codex, Claude, OpenCode, and hermes-agent.
+
+It is built as a companion to OpenClaw, not a replacement. OpenClaw can continue doing slower recall, dreaming, and long-term promotion. Memory Sync adds the fast working layer: preserve useful context early, make it searchable in Obsidian, reinforce it when used, and forget it when it stops mattering.
+
+Detailed commands and operating rules live in [SKILL.md](SKILL.md). This README focuses on what the project does and why it exists.
+
+## 中文简介
+
+> 一个本地优先的 agent 记忆层，把对话、项目交接和用户偏好沉淀成 Obsidian 知识库，并支持 Git 版本管理和多 agent 迁移。
+
+Memory Sync 解决的是一个很具体的问题：agent 不是完全没有记忆，而是经常不能在需要的时候用上正确的上下文。
+
+它作为 OpenClaw 的伴侣层，不替代 OpenClaw 原有的 recall、dreaming 和长期记忆沉淀，而是补上更快的一层：先保存有价值的记忆，让它马上进入可检索、可理解、可交接的工作层；之后再通过使用强化和 TTL 遗忘，让真正有用的留下。
+
+具体命令、配置和执行流程写在 [SKILL.md](SKILL.md)。README 只介绍产品作用和基本逻辑。
+
+## Why It Exists
+
+Agent memory often fails in three quiet ways:
+
+| Problem | What Usually Happens | What Memory Sync Adds |
+| --- | --- | --- |
+| Memory is too late | Useful context may only appear after slow long-term distillation | Preserve it early and make it searchable immediately |
+| Memory is too hidden | Users cannot easily inspect, correct, or own what the agent remembers | Store memory as readable Markdown and JSON in Obsidian |
+| Memory is too local | Switching agents means re-explaining the same background | Export compact shared context for multiple agents |
+
+Memory Sync is built for the middle layer between raw chat history and permanent memory:
+
+```text
+preserve first -> use while fresh -> reinforce if useful -> forget if unused
+```
+
+## 为什么需要它
+
+很多 agent 记忆系统的问题不是“完全没记忆”，而是“记忆出现得太晚、藏得太深、迁移成本太高”。
+
+| 问题 | 常见结果 | Memory Sync 的补位 |
+| --- | --- | --- |
+| 记忆太晚 | 长期沉淀完成时，最佳使用窗口已经过去 | 先保存有价值的上下文，立刻进入可检索层 |
+| 记忆太隐蔽 | 用户很难检查、修正、迁移 agent 记住了什么 | 把记忆写进 Obsidian，变成可读、可链接的资产 |
+| 记忆太局部 | 换一个 agent 就要重新解释背景 | 输出多 agent 可共享的精简上下文 |
+
+Memory Sync 关注的是“原始聊天”和“永久记忆”之间的中间层：
+
+```text
+先保存 -> 趁新鲜时使用 -> 有用就强化 -> 没用就遗忘
+```
+
+## What It Solves
+
+| Value | How It Helps |
+| --- | --- |
+| OpenClaw remembers sooner | Copies daily memory and distilled candidates into an Obsidian working layer before long-term promotion finishes |
+| OpenClaw understands the user better | Builds an evidence-backed user profile from repeated preferences, projects, boundaries, and decisions |
+| Memory becomes a personal knowledge base | Turns useful agent collaboration into Markdown, source links, JSON indexes, and Git/GitHub history |
+| Agent switching becomes cheaper | Keeps per-agent lanes separate while publishing shared portable context |
+| OpenClaw gets a complementary rhythm | Lets OpenClaw keep slow deep memory while Memory Sync handles early preservation, use, reinforcement, and forgetting |
+
+## 它解决什么
+
+| 价值 | 作用 |
+| --- | --- |
+| 让 OpenClaw 更早记得住 | 每日记忆和 OpenClaw 筛出的候选记忆先进入 Obsidian 工作层，不必等长期晋升完成 |
+| 让 OpenClaw 更容易听懂用户 | 从反复出现的偏好、项目、边界和决定中动态绘制用户画像 |
+| 打造自己的记忆知识库 | 把 agent 协作中的有效经验变成 Markdown、源链接、JSON 索引和 Git/GitHub 历史 |
+| 降低 agent 切换成本 | 各 agent 保留自己的本地记录，同时共享一份提炼后的通用上下文 |
+| 用“先记忆再遗忘”辅助 OpenClaw | OpenClaw 做更慢更深的长期沉淀，Memory Sync 做更早保存、更快使用和按 TTL 遗忘 |
+
+## Core Model
+
+Memory Sync has four layers:
+
+| Layer | Purpose |
+| --- | --- |
+| Source | Reads OpenClaw daily files, OpenClaw distilled candidates, agent handoffs, project captures, USER.md, and local agent configuration |
+| Obsidian | Provides the human-readable memory surface with Markdown pages, dashboards, source links, and reviewable profile output |
+| Index and Retention | Maintains the machine-readable memory index, S1-S4 stages, hit reinforcement, TTL expiry, and safe cleanup |
+| Shared Context | Publishes compact context packs under `_shared/context/` for Codex, Claude, OpenClaw, OpenCode, and hermes-agent |
+
+OpenClaw source files are treated as read-only. Memory Sync works on Obsidian copies and derived outputs.
+
+## Memory Lifecycle
+
+```text
+OpenClaw / agent context
+        |
+        v
+Obsidian working memory
+        |
+        v
+Index + profile + shared context
+        |
+        v
+Use reinforces, disuse expires
+```
+
+Retention is intentionally practical:
+
+| Stage | Meaning |
+| --- | --- |
+| S1 | Fresh preserved memory |
+| S2 | Used once or backed by a recall signal |
+| S3 | Repeatedly useful or distilled by OpenClaw |
+| S4 | Permanent memory |
+
+## What Makes It Different
+
+- It preserves memory before deciding whether it deserves long-term storage.
+- It treats Obsidian as a first-class memory console, not just a backup folder.
+- It separates per-agent raw context from shared distilled context.
+- It keeps profile claims evidence-backed.
+- It supports forgetting as a product feature, not a failure.
+- It helps multiple agents understand the same user without forcing them into one runtime.
+
+## Supported Agents
+
+| Agent | Role |
+| --- | --- |
+| OpenClaw | Source memory, recall/dreaming candidates, long-term promotion |
+| Codex | Engineering handoff and project-state capture |
+| Claude | Long-context writing, reasoning, and handoff summaries |
+| OpenCode | Code-agent context portability |
+| hermes-agent | Agent-to-agent handoff context |
+
+## Relationship To OpenClaw
+
+OpenClaw and Memory Sync form a two-speed memory system:
+
+| OpenClaw | Memory Sync |
+| --- | --- |
+| Slower recall, dreaming, and promotion | Faster preservation, indexing, and reuse |
+| Finds deeper long-term candidates | Keeps fresh context available early |
+| Maintains its own source memory | Copies useful memory into Obsidian without editing the source |
+
+## Platform Notes
+
+Memory Sync is local-first and uses Python standard library APIs. It is expected to work on Windows, macOS, and Linux when Python, Git, an OpenClaw workspace, and an Obsidian vault path are available.
+
+Obsidian does not need to be running. The script writes Markdown and JSON files directly to the vault.
+
+## Documentation
+
+- [SKILL.md](SKILL.md): commands, workflows, trigger logic, configuration, and operating rules.
+- [config/](config): configurable filters, keywords, and trigger words.
+- [.env.example](.env.example): local path and sync configuration template.
+- [SECURITY.md](SECURITY.md): security and privacy notes for open-source use.
+
+## License
+
+MIT
