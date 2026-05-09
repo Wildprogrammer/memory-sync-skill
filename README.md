@@ -162,7 +162,7 @@ Obsidian does not need to be running. The script writes Markdown and JSON files 
 - Added installed skill inventory sync under `_shared/agent_skills.json`, `_agents/<agent>/skills.json`, and `Personal/Agent Knowledge/Agent Skills.md`.
 - Added operating contracts for OpenClaw and hermes-agent context exports.
 
-## 更新日志
+## 中文更新日志
 
 ### v2.1
 
