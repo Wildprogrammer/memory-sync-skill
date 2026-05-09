@@ -162,14 +162,14 @@ Obsidian does not need to be running. The script writes Markdown and JSON files 
 - Added installed skill inventory sync under `_shared/agent_skills.json`, `_agents/<agent>/skills.json`, and `Personal/Agent Knowledge/Agent Skills.md`.
 - Added operating contracts for OpenClaw and hermes-agent context exports.
 
-## ????
+## 更新日志
 
 ### v2.1
 
-- ?????????????????????????????????? S2 ???
-- ?????????????? MEMORY.md?USER.md?AGENTS.md?TOOLS.md ? `Personal/Agent Knowledge/`?
-- ????? skill ???????? `_shared/agent_skills.json`?`_agents/<agent>/skills.json` ? `Personal/Agent Knowledge/Agent Skills.md`?
-- ? OpenClaw ? hermes-agent ????? Operating Contract??????????????????
+- 新增高价值过程记忆识别：成功步骤、纠正步骤、失败教训、用户约定直接从 S2 起步。
+- 新增非每日长期知识同步：同步 MEMORY.md、USER.md、AGENTS.md、TOOLS.md 到 `Personal/Agent Knowledge/`。
+- 新增已安装 skill 清单同步，输出到 `_shared/agent_skills.json`、`_agents/<agent>/skills.json` 和 `Personal/Agent Knowledge/Agent Skills.md`。
+- 为 OpenClaw 和 hermes-agent 上下文加入 Operating Contract，强化规则读取、冲突反馈和安全边界。
 
 ## Documentation
 
