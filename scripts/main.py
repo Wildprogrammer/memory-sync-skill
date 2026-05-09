@@ -50,7 +50,20 @@ VAULT_DAILY_DIR = "02-Lessons/OpenClaw-Daily"
 STAGES = ("S1", "S2", "S3", "S4")
 PREVIOUS_STAGE = {"S2": "S1", "S3": "S2"}
 RESERVED_INDEX_KEYS = {INDEX_META, "memories", "daily_refs", "processed_dates", "version", "updated_at"}
-ALLOWED_SOURCE_PREFIXES = (f"{VAULT_DAILY_DIR}/", f"{PERMANENT_DIR}/")
+AGENT_DAILY_PATTERN = re.compile(rf"^{re.escape(AGENTS_DIR)}/[^/]+/daily/")
+AGENT_SUMMARY_PATTERN = re.compile(rf"^{re.escape(AGENTS_DIR)}/[^/]+/summaries/")
+DERIVED_SOURCE_PREFIXES = (
+    "_index/",
+    f"{SHARED_DIR}/",
+    f"{AGENTS_DIR}/",
+    f"{MEMORY_PAGES_DIR}/",
+    CONTEXT_DIR + "/",
+)
+ALLOWED_SOURCE_PREFIXES = (
+    f"{VAULT_DAILY_DIR}/",
+    f"{PERMANENT_DIR}/",
+    f"{PERSONAL_KNOWLEDGE_DIR}/",
+)
 LEGACY_SOURCE_MARKERS = ("memory/.dreams/session-corpus/", "main/sessions/", ".jsonl")
 MIN_COMPACT_LENGTH = 80
 PROCESS_MEMORY_MARKERS = {
@@ -631,11 +644,46 @@ def source_type_for(value: str | None) -> str:
     source = str(value or "").replace("\\", "/")
     if source.startswith(f"{VAULT_DAILY_DIR}/"):
         return "daily_copy"
+    if AGENT_DAILY_PATTERN.match(source):
+        return "agent_daily"
+    if source.startswith(f"{PERSONAL_KNOWLEDGE_DIR}/"):
+        return "personal_knowledge"
     if source.startswith(f"{PERMANENT_DIR}/"):
         return "permanent"
+    if AGENT_SUMMARY_PATTERN.match(source):
+        return "agent_summary_derived"
+    if source.startswith(f"{SHARED_DIR}/"):
+        return "shared_derived"
+    if source.startswith("_index/"):
+        return "index_derived"
+    if source.startswith(f"{MEMORY_PAGES_DIR}/"):
+        return "memory_page_derived"
+    if source.startswith(f"{CONTEXT_DIR}/"):
+        return "context_derived"
     if is_legacy_source(source):
         return "legacy_session"
     return "unknown"
+
+
+def is_allowed_memory_source(value: str | None) -> bool:
+    return source_type_for(value) in {
+        "daily_copy",
+        "agent_daily",
+        "personal_knowledge",
+        "permanent",
+        "openclaw_distilled",
+        "agent_ingest",
+    }
+
+
+def is_derived_output_source(value: str | None) -> bool:
+    return source_type_for(value) in {
+        "agent_summary_derived",
+        "shared_derived",
+        "index_derived",
+        "memory_page_derived",
+        "context_derived",
+    }
 
 
 def openclaw_daily_source(value: str | None) -> str | None:
@@ -890,7 +938,9 @@ def filter_reason(memory: dict[str, Any]) -> str | None:
     source = str(memory.get("source_file", ""))
     if is_legacy_source(source):
         return "legacy_session_source"
-    if source_type_for(source) == "unknown":
+    if is_derived_output_source(source):
+        return "derived_output_source"
+    if not is_allowed_memory_source(source):
         return "unknown_source"
     text = memory_blob(memory)
     reason = noise_reason_for_text(text)
@@ -1479,22 +1529,22 @@ class MemorySync:
         existing["updated_at"] = now_iso()
         self.log(f"MERGE {candidate['source_file']} -> {memory_id} keyword_overlap={score:.2f}")
 
-    def add_or_merge(self, candidate: dict[str, Any]) -> str:
+    def add_or_merge(self, candidate: dict[str, Any]) -> tuple[str, str]:
         uid = candidate.get("candidate_uid")
         if uid:
             for memory_id, existing in self.store.memories().items():
                 if existing.get("candidate_uid") == uid:
                     self.merge_memory(memory_id, existing, candidate, 1.0)
-                    return memory_id
+                    return memory_id, "merged"
         duplicate = self.find_duplicate(candidate)
         if duplicate:
             memory_id, existing, score = duplicate
             self.merge_memory(memory_id, existing, candidate, score)
-            return memory_id
+            return memory_id, "merged"
         memory_id = self.store.next_id()
         self.store.data[memory_id] = candidate
         self.log(f"ADD {memory_id}: {candidate['title']}")
-        return memory_id
+        return memory_id, "added"
 
     def ensure_vault_copy_for_source(self, source: str) -> str | None:
         vault_source = openclaw_daily_source(source)
@@ -1674,24 +1724,30 @@ class MemorySync:
             )
         return candidates
 
-    def import_openclaw_distilled_candidates(self) -> int:
+    def import_openclaw_distilled_candidates(self) -> Counter[str]:
+        stats: Counter[str] = Counter()
         if not CONFIG["OPENCLAW_IMPORT_DISTILLED"]:
-            return 0
+            return stats
         candidates: list[dict[str, Any]] = []
         candidates.extend(self.collect_promoted_candidates())
         candidates.extend(self.collect_dream_candidates("deep", "openclaw-deep"))
         candidates.extend(self.collect_dream_candidates("rem", "openclaw-rem"))
         candidates.extend(self.collect_recall_candidates())
 
-        changed = 0
+        stats["candidates"] = len(candidates)
         for candidate in candidates:
-            self.add_or_merge(candidate)
-            changed += 1
-        if changed:
+            _memory_id, action = self.add_or_merge(candidate)
+            stats[action] += 1
+        if stats["candidates"]:
             self.store.data[INDEX_META]["openclaw_distilled_imported_at"] = now_iso()
-            self.store.data[INDEX_META]["openclaw_distilled_imported_count"] = changed
-        self.log(f"OpenClaw distilled import: candidates={changed}")
-        return changed
+            self.store.data[INDEX_META]["openclaw_distilled_imported_count"] = stats["candidates"]
+            self.store.data[INDEX_META]["openclaw_distilled_imported_added"] = stats["added"]
+            self.store.data[INDEX_META]["openclaw_distilled_imported_merged"] = stats["merged"]
+        self.log(
+            "OpenClaw distilled import: "
+            f"candidates={stats['candidates']}, added={stats['added']}, merged={stats['merged']}"
+        )
+        return stats
 
     def cmd_sync(self) -> int:
         memory_dir = self.openclaw_path / DAILY_DIR
@@ -1702,7 +1758,7 @@ class MemorySync:
         processed = self.store.data[INDEX_META].setdefault("processed_files", {})
         referenced = self.store.referenced_files()
         changed_files = 0
-        created_or_merged = 0
+        memory_stats: Counter[str] = Counter()
         unrelated_files: list[Path] = []
 
         for path in sorted(memory_dir.glob("*.md")):
@@ -1730,21 +1786,26 @@ class MemorySync:
                 continue
 
             for candidate in candidates:
-                self.add_or_merge(candidate)
-                created_or_merged += 1
+                _memory_id, action = self.add_or_merge(candidate)
+                memory_stats[action] += 1
             processed[original_rel] = digest
 
-        created_or_merged += self.import_openclaw_distilled_candidates()
+        distilled_stats = self.import_openclaw_distilled_candidates()
+        memory_stats.update(distilled_stats)
         expired = self.apply_expiry()
         cleaned = self.clean_unrelated_daily_files(unrelated_files)
-        changed = changed_files > 0 or created_or_merged > 0 or expired or cleaned
+        changed = changed_files > 0 or memory_stats["added"] > 0 or memory_stats["merged"] > 0 or expired or cleaned
         if changed:
             self.store.save()
         self.write_obsidian_index()
         if CONFIG["DERIVED_OUTPUTS_ENABLED"]:
             self.refresh_derived_outputs()
 
-        self.log(f"Sync complete: files={changed_files}, memories={created_or_merged}")
+        self.log(
+            "Sync complete: "
+            f"files={changed_files}, added={memory_stats['added']}, merged={memory_stats['merged']}, "
+            f"distilled_candidates={memory_stats['candidates']}"
+        )
         return 0
 
     def clean_unrelated_daily_files(self, candidates: list[Path]) -> bool:
@@ -3194,9 +3255,9 @@ class MemorySync:
         if reason:
             self.log(f"Stored agent daily only; not indexed reason={reason}: {rel}")
         else:
-            memory_id = self.add_or_merge(candidate)
+            memory_id, action = self.add_or_merge(candidate)
             self.store.save()
-            self.log(f"Ingest indexed: {memory_id} [{candidate.get('stage')}] {title}")
+            self.log(f"Ingest indexed: {memory_id} [{candidate.get('stage')}] action={action} {title}")
 
         self.refresh_derived_outputs()
         self.log(f"Agent ingest stored: {rel}")
