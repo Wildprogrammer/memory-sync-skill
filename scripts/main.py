@@ -42,6 +42,9 @@ SHARED_MEMORY_INDEX = f"{SHARED_DIR}/shared_memory_index.json"
 SHARED_PROFILE_JSON = f"{SHARED_DIR}/user_profile.json"
 SHARED_CONTEXT_JSON = f"{SHARED_DIR}/agent_context.json"
 PERMANENT_DIR = "03-Reference/OpenClaw-Permanent"
+PERSONAL_KNOWLEDGE_DIR = "Personal/Agent Knowledge"
+AGENT_SKILLS_MD_FILE = f"{PERSONAL_KNOWLEDGE_DIR}/Agent Skills.md"
+SHARED_AGENT_SKILLS_JSON = f"{SHARED_DIR}/agent_skills.json"
 DAILY_DIR = "memory"
 VAULT_DAILY_DIR = "02-Lessons/OpenClaw-Daily"
 STAGES = ("S1", "S2", "S3", "S4")
@@ -50,6 +53,65 @@ RESERVED_INDEX_KEYS = {INDEX_META, "memories", "daily_refs", "processed_dates", 
 ALLOWED_SOURCE_PREFIXES = (f"{VAULT_DAILY_DIR}/", f"{PERMANENT_DIR}/")
 LEGACY_SOURCE_MARKERS = ("memory/.dreams/session-corpus/", "main/sessions/", ".jsonl")
 MIN_COMPACT_LENGTH = 80
+PROCESS_MEMORY_MARKERS = {
+    "success_pattern": [
+        "success",
+        "succeeded",
+        "works",
+        "verified",
+        "passed",
+        "final fix",
+        "correct approach",
+        "\u6210\u529f",
+        "\u9a8c\u8bc1\u901a\u8fc7",
+        "\u53ef\u884c",
+        "\u6700\u7ec8\u65b9\u6848",
+        "\u6b63\u786e\u505a\u6cd5",
+    ],
+    "correction": [
+        "correction",
+        "corrected",
+        "wrong",
+        "mistake",
+        "should be",
+        "instead",
+        "\u7ea0\u6b63",
+        "\u641e\u9519",
+        "\u4e0d\u5bf9",
+        "\u5e94\u8be5",
+        "\u6539\u6210",
+        "\u504f\u5dee",
+    ],
+    "failure_lesson": [
+        "failed",
+        "failure",
+        "root cause",
+        "lesson",
+        "do not repeat",
+        "regression",
+        "\u5931\u8d25",
+        "\u5931\u8d25\u539f\u56e0",
+        "\u6559\u8bad",
+        "\u4e0d\u8981\u518d",
+        "\u95ee\u9898\u5728\u4e8e",
+        "\u5bfc\u81f4",
+    ],
+    "user_rule": [
+        "agreement",
+        "agreed",
+        "default should",
+        "always",
+        "never",
+        "must",
+        "\u7ea6\u5b9a",
+        "\u4ee5\u540e",
+        "\u9ed8\u8ba4",
+        "\u5fc5\u987b",
+        "\u4e0d\u80fd",
+        "\u5148\u8ba1\u5212",
+    ],
+}
+PROCESS_MEMORY_MIN_MARKER_HITS = 1
 STRONG_KEYWORD_ALLOWLIST: set[str] = set()
 OPENCLAW_RECALL_MIN_SCORE = 0.70
 OPENCLAW_RECALL_MIN_RECALLS = 1
@@ -496,6 +558,60 @@ def safe_name(value: str, limit: int = 80) -> str:
     return (cleaned or "memory")[:limit]
 
 
+def parse_skill_frontmatter(text: str) -> tuple[dict[str, str], bool]:
+    if not text.startswith("---"):
+        return {}, False
+    parts = text.split("---", 2)
+    if len(parts) < 3:
+        return {}, False
+    data: dict[str, str] = {}
+    for raw in parts[1].splitlines():
+        if ":" not in raw:
+            continue
+        key, value = raw.split(":", 1)
+        data[key.strip()] = value.strip().strip('"').strip("'")
+    return data, True
+
+
+def parse_skill_doc(path: Path) -> dict[str, Any]:
+    text = path.read_text(encoding="utf-8", errors="replace")
+    frontmatter, valid = parse_skill_frontmatter(text)
+    name = frontmatter.get("name") or path.parent.name
+    description = frontmatter.get("description", "").strip()
+    if not description:
+        body = text.split("---", 2)[-1] if text.startswith("---") else text
+        for line in body.splitlines():
+            clean = line.strip(" #\t-")
+            if clean and not clean.lower().startswith("use this skill"):
+                description = clean
+                break
+    return {
+        "name": name,
+        "description": compact_text(description or "No description provided.", 220),
+        "path": path.as_posix(),
+        "frontmatter_valid": valid and bool(name),
+        "last_modified": datetime.fromtimestamp(path.stat().st_mtime).replace(microsecond=0).isoformat(),
+        "sha256": file_hash(path)[:16],
+        "enabled": ".disabled" not in path.as_posix().lower(),
+    }
+
+
+def parse_skill_manifest(text: str) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for raw in text.splitlines():
+        bullet = re.match(r"\s*-\s+\*\*([^*]+)\*\*\s+-\s+(.+)", raw)
+        if bullet:
+            result[bullet.group(1).strip()] = bullet.group(2).strip()
+            continue
+        table = re.match(r"\s*\|\s*([^|`*]+?)\s*\|\s*([^|]+?)\s*\|", raw)
+        if table:
+            name = table.group(1).strip()
+            desc = table.group(2).strip()
+            if name and desc and name.lower() not in {"skill", "---"}:
+                result[name] = desc
+    return result
+
+
 def keyword_set(memory: dict[str, Any]) -> set[str]:
     source = memory.get("strong_keywords") or memory.get("keywords", [])
     return {normalize_keyword(str(item)) for item in source if not is_generic_keyword(str(item))}
@@ -736,6 +852,8 @@ def first_title(content: str) -> str:
 
 
 def noise_reason_for_text(text: str) -> str | None:
+    if classify_process_memory(text):
+        return blacklist_reason_for_text(text)
     compact = re.sub(r"\s+", "", text)
     if len(compact) < MIN_COMPACT_LENGTH:
         return "too_short"
@@ -812,6 +930,8 @@ def title_from_ingest(content: str, agent: str) -> str:
 
 def stage_for_agent_ingest(content: str) -> str:
     lowered = content.lower()
+    if classify_process_memory(content):
+        return "S2"
     strong_markers = [
         "decision",
         "decided",
@@ -831,6 +951,24 @@ def stage_for_agent_ingest(content: str) -> str:
     if any(marker in lowered for marker in strong_markers):
         return "S2"
     return "S1"
+
+
+def classify_process_memory(content: str) -> dict[str, Any] | None:
+    lowered = content.lower()
+    matches: dict[str, list[str]] = {}
+    for lesson_type, markers in PROCESS_MEMORY_MARKERS.items():
+        found = [marker for marker in markers if marker.lower() in lowered]
+        if found:
+            matches[lesson_type] = found[:6]
+    if sum(len(items) for items in matches.values()) < PROCESS_MEMORY_MIN_MARKER_HITS:
+        return None
+    priority = ["correction", "failure_lesson", "user_rule", "success_pattern"]
+    lesson_type = next((item for item in priority if item in matches), next(iter(matches)))
+    return {
+        "memory_type": "process_memory",
+        "lesson_type": lesson_type,
+        "process_markers": matches,
+    }
 
 
 def score_keyword(token: str, frequency: int, source: str) -> float:
@@ -1167,7 +1305,7 @@ class MemorySync:
         stage = "S1"
         summary = extract_summary(body)
         keyword_profile = extract_keyword_profile(body, title=title)
-        return {
+        memory = {
             "title": title[:100],
             "summary": summary,
             "keywords": keyword_profile["keywords"],
@@ -1198,6 +1336,19 @@ class MemorySync:
                 }
             ],
         }
+        self.apply_process_memory_metadata(memory, body)
+        return memory
+
+    def apply_process_memory_metadata(self, memory: dict[str, Any], body: str) -> None:
+        process = classify_process_memory(body)
+        if not process:
+            return
+        memory.update(process)
+        memory["stage"] = "S2"
+        memory["expire_at"] = self.store.expire_at("S2")
+        memory["quality_score"] = max(float(memory.get("quality_score", 0.0) or 0.0), 0.82)
+        memory["memory_lane"] = "process"
+        memory["source_confidence"] = memory.get("source_confidence") or "process_marker"
 
     def build_distilled_memory(
         self,
@@ -1240,6 +1391,7 @@ class MemorySync:
         memory["memory_lane"] = "pending"
         memory["source_confidence"] = "agent_submitted"
         memory["quality_score"] = 0.8 if stage == "S2" else 0.65
+        self.apply_process_memory_metadata(memory, body)
         memory["context_storage_policy"] = "summary_with_source_link"
         memory["original_context_file"] = source_file
         memory["original_context_anchor"] = anchor
@@ -1313,6 +1465,11 @@ class MemorySync:
                 "context_storage_policy",
                 "original_context_file",
                 "original_context_anchor",
+                "memory_type",
+                "lesson_type",
+                "process_markers",
+                "memory_lane",
+                "source_confidence",
             ):
             if field in candidate:
                 existing[field] = candidate[field]
@@ -1707,6 +1864,7 @@ class MemorySync:
     def cmd_diagnose(self, text: str) -> int:
         triggers = self.trigger_words_in(text)
         reason = noise_reason_for_text(text)
+        process = classify_process_memory(text)
         profile = extract_keyword_profile(text)
         blocked, generic = keyword_diagnostics(text)
         matches = self.matching_memories(text)
@@ -1715,6 +1873,7 @@ class MemorySync:
         self.log(f"Filtered: {'yes' if reason else 'no'}")
         if reason:
             self.log(f"Filter reason: {reason}")
+        self.log(f"Process memory: {process.get('lesson_type') if process else '(none)'}")
         self.log(f"Keywords: {', '.join(profile['keywords']) if profile['keywords'] else '(none)'}")
         self.log(
             f"Strong keywords: {', '.join(profile['strong_keywords']) if profile['strong_keywords'] else '(none)'}"
@@ -2066,6 +2225,9 @@ class MemorySync:
             "original_context_anchor": memory.get("original_context_anchor") or memory.get("source_anchor", ""),
             "candidate_origin": memory.get("candidate_origin"),
             "candidate_uid": memory.get("candidate_uid"),
+            "memory_type": memory.get("memory_type"),
+            "lesson_type": memory.get("lesson_type"),
+            "process_markers": memory.get("process_markers"),
             "effective_hit_count": memory.get("effective_hit_count", 0),
             "expire_at": memory.get("expire_at"),
         }
@@ -2120,6 +2282,164 @@ class MemorySync:
                 if not target.exists() or file_hash(path) != file_hash(target):
                     target.write_text(path.read_text(encoding="utf-8", errors="replace"), encoding="utf-8")
 
+    def skill_roots(self) -> list[tuple[str, str, Path]]:
+        home = Path.home()
+        roots: list[tuple[str, str, Path]] = [
+            ("openclaw", "workspace", self.openclaw_path / "skills"),
+            ("openclaw", "user", home / ".openclaw" / "skills"),
+            ("codex", "user", home / ".codex" / "skills"),
+            ("codex", "system", home / ".codex" / "skills" / ".system"),
+            ("codex", "plugins", home / ".codex" / "plugins" / "cache"),
+            ("claude", "user", home / ".claude" / "skills"),
+            ("opencode", "user", home / ".config" / "opencode" / "skills"),
+            ("opencode", "windows-user", home / "AppData" / "Roaming" / "opencode" / "skills"),
+            ("hermes-agent", "user", home / ".hermes-agent" / "skills"),
+            ("shared", "agents", home / ".agents" / "skills"),
+        ]
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            roots.append(("openclaw", "official-npm", Path(appdata) / "npm" / "node_modules" / "openclaw" / "skills"))
+        extra = os.environ.get("MEMORY_SYNC_SKILL_DIRS", "")
+        for index, raw in enumerate([item for item in extra.split(os.pathsep) if item.strip()], start=1):
+            roots.append(("custom", f"extra-{index}", expand_path(raw)))
+
+        seen: set[str] = set()
+        result = []
+        for agent, level, path in roots:
+            key = path.as_posix().lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append((agent, level, path))
+        return result
+
+    def openclaw_skill_manifest_descriptions(self) -> dict[str, str]:
+        descriptions: dict[str, str] = {}
+        for rel in ("SKILLS.md", "skills/ALL_SKILLS_MANIFEST.md"):
+            path = self.openclaw_path / rel
+            text = self.read_optional_text(path, limit=300000)
+            if text:
+                descriptions.update(parse_skill_manifest(text))
+        return descriptions
+
+    def collect_skill_inventory(self) -> dict[str, Any]:
+        manifest_descriptions = self.openclaw_skill_manifest_descriptions()
+        records: list[dict[str, Any]] = []
+        seen_paths: set[str] = set()
+        for agent, level, root in self.skill_roots():
+            if not root.exists() or not root.is_dir():
+                continue
+            count = 0
+            for skill_doc in sorted(root.rglob("SKILL.md")):
+                if count >= 500:
+                    break
+                normalized = skill_doc.resolve().as_posix().lower()
+                if normalized in seen_paths:
+                    continue
+                seen_paths.add(normalized)
+                try:
+                    record = parse_skill_doc(skill_doc)
+                except OSError:
+                    continue
+                if record["name"] in manifest_descriptions and (
+                    not record["description"] or record["description"] == "No description provided."
+                ):
+                    record["description"] = compact_text(manifest_descriptions[record["name"]], 220)
+                record.update(
+                    {
+                        "agent": agent,
+                        "level": level,
+                        "root": root.as_posix(),
+                        "relative_path": skill_doc.relative_to(root).as_posix(),
+                    }
+                )
+                records.append(record)
+                count += 1
+        records.sort(key=lambda item: (str(item.get("agent")), str(item.get("level")), str(item.get("name"))))
+        return {
+            "_meta": {
+                "schema": "memory-sync-agent-skill-inventory",
+                "generated_at": now_iso(),
+                "record_count": len(records),
+                "policy": "Personal vault output may include local paths; public releases should keep only generic scan logic.",
+            },
+            "skills": records,
+        }
+
+    def write_skill_inventory(self) -> dict[str, Any]:
+        inventory = self.collect_skill_inventory()
+        self.write_json_atomic(self.vault_path / SHARED_AGENT_SKILLS_JSON, inventory)
+        by_agent: dict[str, list[dict[str, Any]]] = {}
+        for record in inventory["skills"]:
+            by_agent.setdefault(str(record.get("agent")), []).append(record)
+        for agent, records in by_agent.items():
+            self.write_json_atomic(
+                self.agent_dir(agent) / "skills.json",
+                {
+                    "_meta": {
+                        "schema": "memory-sync-agent-skills",
+                        "agent": agent,
+                        "generated_at": inventory["_meta"]["generated_at"],
+                        "record_count": len(records),
+                    },
+                    "skills": records,
+                },
+            )
+
+        lines = [
+            "# Agent Skills",
+            "",
+            "> Auto-generated by memory-sync. This is a personal capability inventory and may include local paths.",
+            "",
+            f"- Generated: {inventory['_meta']['generated_at']}",
+            f"- Skills: {inventory['_meta']['record_count']}",
+            "",
+        ]
+        for agent in sorted(by_agent):
+            lines.extend([f"## {agent}", ""])
+            for record in by_agent[agent]:
+                status = "" if record.get("enabled") else " (disabled)"
+                valid = "" if record.get("frontmatter_valid") else " [frontmatter?]"
+                lines.append(
+                    f"- **{record.get('name')}**{status}{valid}: {record.get('description')} "
+                    f"`{record.get('level')}` `{record.get('path')}`"
+                )
+            lines.append("")
+        self.write_text_atomic(self.vault_path / AGENT_SKILLS_MD_FILE, "\n".join(lines).rstrip() + "\n")
+        self.write_text_atomic(self.vault_path / "03-Reference" / "Agent Skills.md", "\n".join(lines).rstrip() + "\n")
+        return inventory
+
+    def sync_personal_knowledge_base(self) -> None:
+        sources = [
+            ("openclaw", self.openclaw_path / "MEMORY.md"),
+            ("openclaw", self.openclaw_path / "USER.md"),
+            ("openclaw", self.openclaw_path / "AGENTS.md"),
+            ("openclaw", self.openclaw_path / "TOOLS.md"),
+            ("codex", Path.home() / ".codex" / "AGENTS.md"),
+            ("codex", Path.home() / ".codex" / "config.toml"),
+        ]
+        for agent, source in sources:
+            if not source.exists() or not source.is_file():
+                continue
+            target = self.vault_path / PERSONAL_KNOWLEDGE_DIR / agent / source.name
+            body = source.read_text(encoding="utf-8", errors="replace")
+            content = "\n".join(
+                [
+                    "---",
+                    "type: agent_knowledge_source",
+                    f"agent: {agent}",
+                    f"source_path: {source.as_posix()}",
+                    f"generated_at: {now_iso()}",
+                    "---",
+                    "",
+                    f"# {agent} {source.name}",
+                    "",
+                    body.rstrip(),
+                    "",
+                ]
+            )
+            self.write_text_atomic(target, content)
+
     def shared_memory_records(self) -> dict[str, dict[str, Any]]:
         result: dict[str, dict[str, Any]] = {}
         for memory_id, memory in self.store.memories().items():
@@ -2153,6 +2473,8 @@ class MemorySync:
 
     def refresh_derived_outputs(self) -> None:
         self.write_agent_local_stores()
+        self.sync_personal_knowledge_base()
+        self.write_skill_inventory()
         profile = self.build_user_profile()
         self.save_user_profile(profile)
         context = self.build_agent_context(profile)
@@ -2187,10 +2509,12 @@ class MemorySync:
             PROFILE_MD_FILE,
             MEMORY_DASHBOARD_FILE,
             MEMORY_PAGES_DIR,
+            "03-Reference/Agent Skills.md",
             VAULT_DAILY_DIR,
             PERMANENT_DIR,
             AGENTS_DIR,
             SHARED_DIR,
+            PERSONAL_KNOWLEDGE_DIR,
         ]
         if CONFIG["LEGACY_CONTEXT_ENABLED"]:
             candidates.append(CONTEXT_DIR)
@@ -2284,6 +2608,14 @@ class MemorySync:
             self.log("Expiring within 3 days:")
             for expire_at, memory_id, memory in sorted(expiring)[:10]:
                 self.log(f"- {memory_id} {memory.get('title')} at {expire_at.isoformat()}")
+        return 0
+
+    def cmd_skills_sync(self) -> int:
+        self.sync_personal_knowledge_base()
+        inventory = self.write_skill_inventory()
+        self.log(f"Skill inventory written: {SHARED_AGENT_SKILLS_JSON}")
+        self.log(f"Skill markdown written: {AGENT_SKILLS_MD_FILE}")
+        self.log(f"Skills: {inventory['_meta']['record_count']}")
         return 0
 
     def profile_path(self) -> Path:
@@ -2561,6 +2893,13 @@ class MemorySync:
 
     def build_agent_context(self, profile: dict[str, Any]) -> dict[str, Any]:
         summary = profile.get("summary", {})
+        skill_inventory_path = self.vault_path / SHARED_AGENT_SKILLS_JSON
+        skill_count = 0
+        if skill_inventory_path.exists():
+            try:
+                skill_count = int(json.loads(skill_inventory_path.read_text(encoding="utf-8")).get("_meta", {}).get("record_count", 0))
+            except (json.JSONDecodeError, OSError, ValueError):
+                skill_count = 0
         return {
             "_meta": {
                 "schema": "memory-sync-agent-context",
@@ -2578,6 +2917,21 @@ class MemorySync:
             "prompt_preferences": summary.get("prompt_preferences", [])[:8],
             "do_not_assume": summary.get("do_not_assume", [])[:8],
             "memory_snapshot": self.memory_snapshot(shared_only=True),
+            "instruction_contract": {
+                "applies_to": ["openclaw", "hermes-agent"],
+                "must_read": ["AGENTS.md", "USER.md", "MEMORY.md", "memory/today-and-yesterday"],
+                "conflict_protocol": [
+                    "If AGENTS.md/USER.md cannot be read, say so explicitly instead of pretending.",
+                    "If user instructions conflict with system/developer safety rules, follow higher-priority rules and explain the conflict.",
+                    "If a requested action conflicts with AGENTS.md safety rules, surface the conflict before acting.",
+                    "Never delete OpenClaw source memory; memory-sync cleanup operates on Obsidian copies and derived outputs.",
+                ],
+            },
+            "skill_inventory": {
+                "path": SHARED_AGENT_SKILLS_JSON,
+                "markdown": AGENT_SKILLS_MD_FILE,
+                "record_count": skill_count,
+            },
             "paths": {
                 "memory_index": f"_index/{INDEX_NAME}",
                 "user_profile": f"_index/{PROFILE_NAME}",
@@ -2585,6 +2939,8 @@ class MemorySync:
                 "daily_copies": VAULT_DAILY_DIR,
                 "context_dir": SHARED_CONTEXT_DIR,
                 "legacy_context_dir": CONTEXT_DIR if CONFIG["LEGACY_CONTEXT_ENABLED"] else None,
+                "skill_inventory": SHARED_AGENT_SKILLS_JSON,
+                "personal_knowledge": PERSONAL_KNOWLEDGE_DIR,
             },
         }
 
@@ -2600,6 +2956,13 @@ class MemorySync:
         lines = [f"# {title}", "", f"Generated: {context['_meta']['generated_at']}", "", "## User Brief", "", context.get("profile_brief", ""), ""]
         if adapter == "hermes-agent":
             lines.extend([
+                "## Operating Contract",
+                "",
+                "- Before acting, read AGENTS.md, USER.md, MEMORY.md, and today's/yesterday's daily memory when available.",
+                "- If a required rule file is missing or unreadable, report it explicitly.",
+                "- If instructions conflict with safety rules or AGENTS.md, explain the conflict and follow the higher-priority rule.",
+                "- Do not claim to have followed a local rule unless the rule source was actually read.",
+                "",
                 "## Handoff Protocol",
                 "",
                 "- Carry the user's stable preferences, active projects, and current memory snapshot between agents.",
@@ -2613,7 +2976,20 @@ class MemorySync:
         elif adapter == "claude":
             lines.extend(["## Claude Operating Notes", "", "- Use the structured profile as stable context, then reason through ambiguity before writing.", "- Keep responses concise and evidence-backed.", ""])
         elif adapter == "openclaw":
-            lines.extend(["## OpenClaw Operating Notes", "", "- This is a distilled user/context state for continuity.", "- Raw memory remains in OpenClaw; Obsidian index is the persistent projection.", ""])
+            lines.extend([
+                "## Operating Contract",
+                "",
+                "- Before acting, read AGENTS.md, USER.md, MEMORY.md, and today's/yesterday's daily memory when available.",
+                "- If a required rule file is missing or unreadable, report it explicitly.",
+                "- If user instructions conflict with system/developer safety rules or AGENTS.md, surface the conflict before acting.",
+                "- Never delete OpenClaw source memory; use Obsidian copies and derived outputs for memory-sync cleanup.",
+                "",
+                "## OpenClaw Operating Notes",
+                "",
+                "- This is a distilled user/context state for continuity.",
+                "- Raw memory remains in OpenClaw; Obsidian index is the persistent projection.",
+                "",
+            ])
         elif adapter == "opencode":
             lines.extend(["## OpenCode Operating Notes", "", "- Optimize for direct implementation context and minimal prose.", "- Use paths and commands from the context package.", ""])
 
@@ -2648,6 +3024,13 @@ class MemorySync:
                 anchor = memory.get("original_context_anchor") or memory.get("source_anchor")
                 if source:
                     lines.append(f"  Source: [[{source}]]{f' {anchor}' if anchor else ''}")
+            lines.append("")
+        skills = context.get("skill_inventory", {})
+        if skills:
+            lines.extend(["## Installed Skills", ""])
+            lines.append(f"- Inventory: [[{skills.get('markdown')}]]")
+            lines.append(f"- JSON: `{skills.get('path')}`")
+            lines.append(f"- Count: {skills.get('record_count', 0)}")
             lines.append("")
         return "\n".join(lines).rstrip() + "\n"
 
@@ -2879,6 +3262,13 @@ class MemorySync:
             issues.append("missing _shared directory")
         if not (self.vault_path / SHARED_CONTEXT_DIR).exists():
             issues.append("missing _shared/context directory")
+        if not (self.vault_path / SHARED_AGENT_SKILLS_JSON).exists():
+            issues.append("missing shared agent skill inventory")
+        for rel in ("AGENTS.md", "USER.md"):
+            if not (self.openclaw_path / rel).exists():
+                issues.append(f"missing OpenClaw rule/profile source: {rel}")
+        if not (self.vault_path / PERSONAL_KNOWLEDGE_DIR / "openclaw" / "MEMORY.md").exists():
+            issues.append("missing Personal Agent Knowledge copy of OpenClaw MEMORY.md")
         if len(profile.get("summary", {}).get("communication_style", [])) == 0:
             issues.append("communication_style has no signals")
         if len(profile.get("summary", {}).get("active_projects", [])) == 0:
@@ -2936,6 +3326,7 @@ def usage() -> None:
     print("  python scripts/main.py context export [all|codex|claude|openclaw|opencode|hermes-agent]")
     print("  python scripts/main.py context brief")
     print("  python scripts/main.py context doctor")
+    print("  python scripts/main.py skills sync")
     print("  python scripts/main.py git sync")
     print("  python scripts/main.py status")
     print("  python scripts/main.py autopilot")
@@ -3039,6 +3430,11 @@ def main(argv: list[str] | None = None) -> int:
         if args[1] == "brief":
             return app.cmd_context_brief()
         return app.cmd_context_doctor()
+    if command == "skills":
+        if len(args) != 2 or args[1] != "sync":
+            print("ERROR skills requires: sync")
+            return 1
+        return app.cmd_skills_sync()
     if command == "status":
         if len(args) != 1:
             print("ERROR status takes no extra arguments")

@@ -1,6 +1,6 @@
 ---
 name: memory-sync
-description: Synchronize OpenClaw memory and multi-agent handoffs into Obsidian as a fast retention and context portability layer. Copies OpenClaw daily files, imports recall/dreaming/MEMORY candidates, ingests Codex/Claude/OpenClaw/OpenCode/hermes-agent handoff summaries, keeps per-agent stores under _agents, builds shared assets under _shared, maintains JSON/Markdown indexes, builds user profile, exports context packs, applies S1-S4 TTL, supports trigger check/hit, safe Obsidian-only cleanup, and optional Git/GitHub sync. Use for memory sync, ingest codex, candidates, handoff openclaw, search, profile build, context export, hermes-agent handoff, git sync, status, or autopilot.
+description: Synchronize OpenClaw memory and multi-agent handoffs into Obsidian as a fast retention and context portability layer. Copies OpenClaw daily files, imports recall/dreaming/MEMORY candidates, preserves non-daily agent knowledge into Personal/Agent Knowledge, syncs installed skill inventories, ingests Codex/Claude/OpenClaw/OpenCode/hermes-agent handoff summaries, keeps per-agent stores under _agents, builds shared assets under _shared, maintains JSON/Markdown indexes, builds user profile, exports context packs, applies S1-S4 TTL, supports trigger check/hit, safe Obsidian-only cleanup, and optional Git/GitHub sync. Use for memory sync, ingest codex, candidates, handoff openclaw, skills sync, search, profile build, context export, hermes-agent handoff, git sync, status, or autopilot.
 ---
 
 # Memory Sync
@@ -15,9 +15,12 @@ Use this skill as an OpenClaw companion and multi-agent handoff layer, not a rep
 - Generate `03-Reference/OpenClaw记忆索引.md` as the human-readable Obsidian entry.
 - Generate `03-Reference/Memory Dashboard.md` and `03-Reference/Memories/` cards so Obsidian is a readable memory console, not only a file sink.
 - Import OpenClaw distilled signals from `.dreams/short-term-recall.json`, `.dreams/phase-signals.json`, `memory/dreaming/rem/`, `memory/dreaming/deep/`, and promoted `MEMORY.md` entries.
+- Preserve non-daily agent knowledge such as `MEMORY.md`, `USER.md`, `AGENTS.md`, and tool/config notes into `Personal/Agent Knowledge/<agent>/`.
+- Detect high-value process memories such as success patterns, corrections, failure lessons, and user rules; these enter as S2 `process_memory` records.
 - Ingest explicit handoff summaries from Codex, Claude, OpenClaw, OpenCode, and hermes-agent into their own `_agents/<agent>/daily/` lane before indexing.
 - Build `_index/user_profile.json` and `03-Reference/User画像.md` from USER.md, the memory index, and local agent configuration.
 - Export portable adapter context under `_shared/context/` for Codex, Claude, OpenClaw, OpenCode, and hermes-agent.
+- Export installed skill inventory under `_shared/agent_skills.json`, `_agents/<agent>/skills.json`, and `Personal/Agent Knowledge/Agent Skills.md`.
 - Treat `_context/` as a legacy compatibility output only; it is disabled by default unless `LEGACY_CONTEXT_ENABLED=true`.
 - Keep per-agent local stores under `_agents/<agent>/` with separate `daily/`, `summaries/`, `index.json`, and `permanent/`.
 - Keep portable shared distilled assets under `_shared/`, including shared memory, profile, context JSON, and adapter Markdown.
@@ -48,6 +51,7 @@ python scripts/main.py context export all
 python scripts/main.py context export hermes-agent
 python scripts/main.py context brief
 python scripts/main.py context doctor
+python scripts/main.py skills sync
 python scripts/main.py git sync
 python scripts/main.py status
 python scripts/main.py autopilot
@@ -65,6 +69,8 @@ copy OpenClaw daily files to Obsidian
 -> write JSON and Markdown indexes
 -> build agent-local stores
 -> build shared profile/context assets
+-> preserve non-daily personal knowledge
+-> sync installed skill inventory
 -> build Obsidian dashboard and per-memory pages
 ```
 
@@ -150,6 +156,32 @@ _shared/context/<agent>.md
 
 Keep the "preserve first, forget later" principle: Obsidian copies and index entries can expire; OpenClaw source files must not be modified.
 
+High-value process memories start at S2. This includes successful procedures, user corrections, failure lessons, and explicit operating rules. These memories are treated as behavior calibration data, not ordinary chatter.
+
+## Personal Knowledge And Skill Inventory
+
+Every sync refreshes personal knowledge outputs:
+
+```text
+Personal/Agent Knowledge/openclaw/MEMORY.md
+Personal/Agent Knowledge/openclaw/USER.md
+Personal/Agent Knowledge/openclaw/AGENTS.md
+Personal/Agent Knowledge/openclaw/TOOLS.md
+Personal/Agent Knowledge/codex/AGENTS.md
+Personal/Agent Knowledge/Agent Skills.md
+```
+
+Skill inventory outputs:
+
+```text
+_shared/agent_skills.json
+_agents/<agent>/skills.json
+03-Reference/Agent Skills.md
+Personal/Agent Knowledge/Agent Skills.md
+```
+
+The skill inventory records skill name, function summary, agent, level/source directory, local path, modified time, hash, enabled state, and frontmatter validity. OpenClaw is scanned across official npm, workspace, and user skill directories so multi-level installations are not missed.
+
 ## Trigger Logic
 
 - `trigger check` is read-only.
@@ -208,6 +240,8 @@ _shared/context/openclaw.md
 _shared/context/opencode.md
 _shared/context/hermes-agent.md
 ```
+
+OpenClaw and hermes-agent context files include an operating contract: read `AGENTS.md`, `USER.md`, `MEMORY.md`, and recent daily memory when available; report missing rule files; surface safety or instruction conflicts; and never delete OpenClaw source memory.
 
 Agent-local outputs:
 
