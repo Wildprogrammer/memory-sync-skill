@@ -122,6 +122,10 @@ Supported agents are `codex`, `claude`, `openclaw`, `opencode`, and `hermes-agen
 
 Ingest writes the submitted summary or captured project state to `_agents/<agent>/daily/YYYY-MM-DD.md` under `Summary` and `Original Context` sections. The index and portable context keep a compact summary plus `source_file`/`source_anchor` back to that original record. It creates an S1/S2 `agent_ingest` candidate when the content passes filters, merges duplicates into `_index/openclaw_memory_index.json`, then refreshes profile and `_shared` context outputs. It does not try to scrape hidden chat transcripts; the agent must submit a concise handoff summary or use `--project` to capture real project state.
 
+When the user asks to sync the current chat, the active agent must write an explicit handoff summary and pipe it to `ingest <agent> --stdin`. The script cannot read hidden chat history by itself. A useful handoff should include: decisions, corrected assumptions, failed attempts, successful commands or steps, files changed, user preferences or constraints, open questions, and source links back to generated files where possible.
+
+On Windows, prefer `--file handoff.md` for Chinese or mixed-language handoffs unless the shell is explicitly configured for UTF-8. Some PowerShell pipelines can replace non-ASCII stdin with `?` before Python receives it.
+
 Use:
 
 ```bash
@@ -169,6 +173,7 @@ Personal/Agent Knowledge/openclaw/AGENTS.md
 Personal/Agent Knowledge/openclaw/TOOLS.md
 Personal/Agent Knowledge/codex/AGENTS.md
 Personal/Agent Knowledge/Agent Skills.md
+Personal/Agent Knowledge/<agent>/Agent Skills.md
 ```
 
 Skill inventory outputs:
@@ -176,11 +181,15 @@ Skill inventory outputs:
 ```text
 _shared/agent_skills.json
 _agents/<agent>/skills.json
+_agents/<agent>/skills.md
 03-Reference/Agent Skills.md
 Personal/Agent Knowledge/Agent Skills.md
+Personal/Agent Knowledge/<agent>/Agent Skills.md
 ```
 
-The skill inventory records skill name, function summary, agent, level/source directory, local path, modified time, hash, enabled state, and frontmatter validity. OpenClaw is scanned across official npm, workspace, and user skill directories so multi-level installations are not missed.
+`03-Reference/Agent Skills.md` is the Obsidian navigation entry. `Personal/Agent Knowledge/Agent Skills.md` is the personal navigation entry. The detailed human-readable inventory is split by agent under `Personal/Agent Knowledge/<agent>/Agent Skills.md`, while `_agents/<agent>/skills.json` remains the machine-readable per-agent store.
+
+The skill inventory records skill name, function summary, agent, level/source directory, local path, modified time, hash, enabled state, and frontmatter validity. OpenClaw is scanned across official npm, workspace, and user skill directories so multi-level installations are not missed. Markdown output language is inferred from the user's local profile/rules, or can be forced with `MEMORY_SYNC_LANGUAGE=zh` or `MEMORY_SYNC_LANGUAGE=en`.
 
 ## Trigger Logic
 
@@ -210,7 +219,7 @@ Keyword extraction should favor project names, code terms, and configured domain
 Use `diagnose` before changing rules:
 
 ```bash
-python scripts/main.py diagnose "remember memory-sync trigger cooldown Obsidian index"
+python scripts/main.py diagnose "remember project retry policy API timeout WebSocket"
 ```
 
 ## User Profile And Agent Context
@@ -268,10 +277,11 @@ Obsidian-readable outputs:
 
 ```text
 03-Reference/Memory Dashboard.md
-03-Reference/Memories/*.md
+03-Reference/Memories/memory_001.md
+03-Reference/Memories/memory_002.md
 ```
 
-Each memory page includes YAML frontmatter, tags, source-agent metadata, wikilinks to the source daily copy, and links back to the index/profile. Shared context uses a stricter snapshot than the full index: S1 memories remain searchable in Obsidian but do not enter adapter context until OpenClaw distills them, the user reinforces them, or they reach a stronger stage.
+Memory page file names are stable and ID-only (`memory_001.md`) so Obsidian, Git, and cross-platform sync do not break on long titles, punctuation, emoji, or renamed summaries. Each memory page includes YAML frontmatter, tags, source-agent metadata, wikilinks to the source daily copy, and links back to the index/profile. Shared context uses a stricter snapshot than the full index: S1 memories remain searchable in Obsidian but do not enter adapter context until OpenClaw distills them, the user reinforces them, or they reach a stronger stage.
 
 The profile is evidence-backed. USER.md and explicit agent configuration get higher weight; S3/S4 and hit-promoted memories get strong weight; S1/S2 provide weaker recent context. Do not treat profile claims as truth unless they have evidence references.
 
