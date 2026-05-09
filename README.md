@@ -152,6 +152,25 @@ Memory Sync is local-first and uses Python standard library APIs. It is expected
 
 Obsidian does not need to be running. The script writes Markdown and JSON files directly to the vault.
 
+
+## Changelog
+
+### v2.1
+
+- Added high-value process memories: success patterns, corrections, failure lessons, and user rules start at S2.
+- Added personal knowledge sync for non-daily agent knowledge such as MEMORY.md, USER.md, AGENTS.md, and TOOLS.md.
+- Added installed skill inventory sync under `_shared/agent_skills.json`, `_agents/<agent>/skills.json`, and `Personal/Agent Knowledge/Agent Skills.md`.
+- Added operating contracts for OpenClaw and hermes-agent context exports.
+
+## ????
+
+### v2.1
+
+- ?????????????????????????????????? S2 ???
+- ?????????????? MEMORY.md?USER.md?AGENTS.md?TOOLS.md ? `Personal/Agent Knowledge/`?
+- ????? skill ???????? `_shared/agent_skills.json`?`_agents/<agent>/skills.json` ? `Personal/Agent Knowledge/Agent Skills.md`?
+- ? OpenClaw ? hermes-agent ????? Operating Contract??????????????????
+
 ## Documentation
 
 - [SKILL.md](SKILL.md): commands, workflows, trigger logic, configuration, and operating rules.
