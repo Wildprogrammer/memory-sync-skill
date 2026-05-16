@@ -34,6 +34,8 @@ Run commands from the skill folder:
 
 ```bash
 python scripts/main.py sync
+python scripts/main.py review prepare
+python scripts/main.py review apply decisions.json
 python scripts/main.py ingest codex --project D:/memory-sync-skill --note "current project handoff"
 python scripts/main.py ingest codex --stdin
 python scripts/main.py ingest claude --file session.md
@@ -57,7 +59,53 @@ python scripts/main.py status
 python scripts/main.py autopilot
 ```
 
-`sync` runs:
+## Agent Review Mode
+
+Default mode is `MEMORY_SYNC_REVIEW_MODE=agent`. In this mode the script does not call an external LLM API and does not silently use rule-only indexing. The current agent running this skill is the reviewer.
+
+When the user asks to run memory sync in agent mode:
+
+```text
+1. Run `python scripts/main.py review prepare`.
+2. Read the generated `_review/memory-sync/latest-pack.json`.
+3. Review every candidate in that pack.
+4. Write a decisions JSON file with one decision per candidate.
+5. Run `python scripts/main.py review apply <decisions.json>`.
+6. Run `python scripts/main.py status` and, if requested or configured, `python scripts/main.py git sync`.
+```
+
+The script handles deterministic work: copying OpenClaw daily files into Obsidian, splitting source material, filtering obvious junk, preserving source anchors, validating decisions, writing JSON/Markdown surfaces, and keeping OpenClaw source files read-only.
+
+The current agent handles judgment work: candidate selection, summary, keywords, S1-S4 rating, process-memory classification, and duplicate/merge suggestions.
+
+Decision output must follow this shape:
+
+```json
+{
+  "decisions": [
+    {
+      "candidate_id": "copy from latest-pack.json",
+      "keep": true,
+      "title": "short stable title",
+      "summary": "evidence-backed summary",
+      "keywords": ["specific", "searchable", "terms"],
+      "strong_keywords": ["precise", "match", "terms"],
+      "stage": "S2",
+      "quality_score": 0.86,
+      "memory_type": "process_memory",
+      "lesson_type": "correction",
+      "merge_with": null,
+      "reason": "why this should be kept, discarded, or merged"
+    }
+  ]
+}
+```
+
+Every candidate in the pack must have a decision. Use `"keep": false` for discarded material. Do not invent facts outside the candidate text. Preserve `source_file` and `source_anchor` by letting the script apply decisions rather than editing the index manually.
+
+Use `MEMORY_SYNC_REVIEW_MODE=rules` only when the user explicitly wants the deterministic fallback, wants to save agent tokens, or needs a headless/offline run.
+
+In `rules` mode, `sync` runs:
 
 ```text
 copy OpenClaw daily files to Obsidian
@@ -74,7 +122,7 @@ copy OpenClaw daily files to Obsidian
 -> build Obsidian dashboard and per-memory pages
 ```
 
-`sync` refreshes user profile and context outputs by default when `DERIVED_OUTPUTS_ENABLED=true`. Generated profile/context/shared files are rebuilt from current evidence, not appended incrementally.
+Both modes refresh user profile and context outputs by default when `DERIVED_OUTPUTS_ENABLED=true`. Generated profile/context/shared files are rebuilt from current evidence, not appended incrementally.
 
 ## OpenClaw Distilled Import
 
@@ -208,6 +256,13 @@ User-adjustable rules live in:
 config/filters.json
 config/keywords.json
 config/triggers.json
+```
+
+Execution mode is controlled by:
+
+```text
+MEMORY_SYNC_REVIEW_MODE=agent  # default
+MEMORY_SYNC_REVIEW_MODE=rules  # deterministic fallback
 ```
 
 - `filters.json`: minimum segment length, source blacklist, text blacklist, and OpenClaw import thresholds.

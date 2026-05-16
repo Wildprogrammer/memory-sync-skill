@@ -48,6 +48,8 @@ REFERENCE_AGENT_SKILLS_MD_FILE = "03-Reference/Agent Skills.md"
 SHARED_AGENT_SKILLS_JSON = f"{SHARED_DIR}/agent_skills.json"
 DAILY_DIR = "memory"
 VAULT_DAILY_DIR = "02-Lessons/OpenClaw-Daily"
+REVIEW_DIR = "_review/memory-sync"
+REVIEW_PACK_NAME = "latest-pack.json"
 STAGES = ("S1", "S2", "S3", "S4")
 PREVIOUS_STAGE = {"S2": "S1", "S3": "S2"}
 RESERVED_INDEX_KEYS = {INDEX_META, "memories", "daily_refs", "processed_dates", "version", "updated_at"}
@@ -524,6 +526,7 @@ CONFIG = {
     "CONTEXT_EXPORT_ENABLED": env_bool("CONTEXT_EXPORT_ENABLED", True),
     "LEGACY_CONTEXT_ENABLED": env_bool("LEGACY_CONTEXT_ENABLED", False),
     "DERIVED_OUTPUTS_ENABLED": env_bool("DERIVED_OUTPUTS_ENABLED", True),
+    "REVIEW_MODE": os.environ.get("MEMORY_SYNC_REVIEW_MODE", "agent").strip().lower() or "agent",
 }
 
 
@@ -1117,6 +1120,27 @@ def compact_text(value: str, limit: int = 180) -> str:
     return text[:limit].rstrip() + ("..." if len(text) > limit else "")
 
 
+def bounded_list(value: Any, limit: int = 16) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    for item in value:
+        text = str(item).strip()
+        if text and text not in result:
+            result.append(text)
+        if len(result) >= limit:
+            break
+    return result
+
+
+def clamp_float(value: Any, default: float = 0.75, minimum: float = 0.0, maximum: float = 1.0) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = default
+    return min(max(number, minimum), maximum)
+
+
 def signal(category: str, label: str, weight: float, source: str, evidence: str, detail: str = "") -> dict[str, Any]:
     return {
         "category": category,
@@ -1351,6 +1375,337 @@ class MemorySync:
         os.replace(tmp, copy_path)
         self.log(f"COPY daily file to vault: {self.vault_rel(copy_path)}")
         return copy_path
+
+    def review_mode(self) -> str:
+        mode = str(CONFIG["REVIEW_MODE"]).strip().lower()
+        if mode not in {"agent", "rules"}:
+            self.log(f"WARN unknown MEMORY_SYNC_REVIEW_MODE={mode!r}; using agent")
+            return "agent"
+        return mode
+
+    def review_pack_path(self) -> Path:
+        return self.vault_path / REVIEW_DIR / REVIEW_PACK_NAME
+
+    def review_candidate_id(self, source_file: str, anchor: str, text: str) -> str:
+        digest = hashlib.sha1(f"{source_file}|{anchor}|{text}".encode("utf-8", errors="ignore")).hexdigest()[:16]
+        safe_source = re.sub(r"[^A-Za-z0-9_.-]+", "-", source_file).strip("-")
+        return f"{safe_source}:{digest}"
+
+    def review_decision_schema(self) -> dict[str, Any]:
+        return {
+            "decisions": [
+                {
+                    "candidate_id": "string from this pack",
+                    "keep": True,
+                    "title": "short stable title",
+                    "summary": "evidence-backed summary",
+                    "keywords": ["specific", "searchable", "terms"],
+                    "strong_keywords": ["terms required for precise matching"],
+                    "stage": "S1|S2|S3|S4",
+                    "quality_score": 0.0,
+                    "memory_type": "optional, e.g. process_memory",
+                    "lesson_type": "optional: success_pattern|correction|failure_lesson|user_rule",
+                    "merge_with": "optional existing memory id",
+                    "reason": "why this should be kept, discarded, or merged",
+                }
+            ]
+        }
+
+    def review_candidate_from_memory(
+        self,
+        memory: dict[str, Any],
+        body: str,
+        source_kind: str,
+        source_agent: str = "openclaw",
+    ) -> dict[str, Any]:
+        source_file = str(memory.get("source_file", ""))
+        anchor = str(memory.get("source_anchor", ""))
+        candidate_id = self.review_candidate_id(source_file, anchor, body)
+        return {
+            "candidate_id": candidate_id,
+            "source_kind": source_kind,
+            "source_agent": source_agent,
+            "source_file": source_file,
+            "source_anchor": anchor,
+            "original_source_file": memory.get("original_source_file"),
+            "title_hint": memory.get("title", ""),
+            "text": body,
+            "text_hash": hashlib.sha256(body.encode("utf-8", errors="ignore")).hexdigest(),
+            "rule_suggestion": {
+                "summary": memory.get("summary", ""),
+                "keywords": memory.get("keywords", []),
+                "strong_keywords": memory.get("strong_keywords", []),
+                "stage": memory.get("stage", "S1"),
+                "quality_score": memory.get("quality_score", 0.75),
+                "memory_type": memory.get("memory_type"),
+                "lesson_type": memory.get("lesson_type"),
+                "candidate_origin": memory.get("candidate_origin"),
+            },
+            "base_memory": memory,
+        }
+
+    def compact_existing_memories(self) -> list[dict[str, Any]]:
+        rows = []
+        for memory_id, memory in self.store.memories().items():
+            rows.append(
+                {
+                    "id": memory_id,
+                    "title": memory.get("title", ""),
+                    "summary": memory.get("summary", ""),
+                    "stage": memory.get("stage", "S1"),
+                    "keywords": memory.get("keywords", [])[:10],
+                    "strong_keywords": memory.get("strong_keywords", [])[:8],
+                    "source_file": memory.get("source_file", ""),
+                }
+            )
+        return rows
+
+    def build_review_pack(self) -> dict[str, Any]:
+        memory_dir = self.openclaw_path / DAILY_DIR
+        if not memory_dir.exists():
+            raise ValueError(f"memory directory not found: {memory_dir}")
+
+        processed = self.store.data[INDEX_META].setdefault("processed_files", {})
+        referenced = self.store.referenced_files()
+        candidates: list[dict[str, Any]] = []
+        processed_files: dict[str, str] = {}
+        copied_daily_files: list[str] = []
+        skipped: list[dict[str, str]] = []
+        existing_uids = {
+            str(memory.get("candidate_uid"))
+            for memory in self.store.memories().values()
+            if memory.get("candidate_uid")
+        }
+
+        for path in sorted(memory_dir.glob("*.md")):
+            original_rel = self.source_rel(path)
+            copy_path = self.vault_daily_path(path)
+            copy_rel = self.vault_rel(copy_path)
+            digest = file_hash(path)
+            if processed.get(original_rel) == digest and (copy_path.exists() or copy_rel not in referenced):
+                continue
+
+            text = path.read_text(encoding="utf-8", errors="replace")
+            self.sync_daily_copy(path, text)
+            processed_files[original_rel] = digest
+            copied_daily_files.append(copy_rel)
+
+            for title, body, anchor in split_segments(text):
+                compact = re.sub(r"\s+", "", body)
+                reason = blacklist_reason_for_text(body)
+                if reason or len(compact) < 40:
+                    skipped.append(
+                        {
+                            "source_file": copy_rel,
+                            "source_anchor": anchor,
+                            "title_hint": title[:80],
+                            "reason": reason or "too_short_for_agent_review",
+                        }
+                    )
+                    continue
+                memory = self.build_memory(title, body, copy_rel, anchor, original_rel)
+                memory["candidate_origin"] = "agent-review-daily"
+                memory["candidate_uid"] = candidate_uid("agent-review-daily", f"{copy_rel}:{anchor}", body)
+                if memory["candidate_uid"] in existing_uids:
+                    skipped.append(
+                        {
+                            "source_file": copy_rel,
+                            "source_anchor": anchor,
+                            "title_hint": title[:80],
+                            "reason": "already_indexed_candidate_uid",
+                        }
+                    )
+                    continue
+                candidates.append(self.review_candidate_from_memory(memory, body, "openclaw_daily", "openclaw"))
+
+        distilled_count = 0
+        if CONFIG["OPENCLAW_IMPORT_DISTILLED"]:
+            distilled: list[dict[str, Any]] = []
+            distilled.extend(self.collect_promoted_candidates())
+            distilled.extend(self.collect_dream_candidates("deep", "openclaw-deep"))
+            distilled.extend(self.collect_dream_candidates("rem", "openclaw-rem"))
+            distilled.extend(self.collect_recall_candidates())
+            for memory in distilled:
+                body = str(memory.get("excerpt") or memory.get("summary") or memory.get("title") or "")
+                if not body:
+                    continue
+                if memory.get("candidate_uid") in existing_uids:
+                    skipped.append(
+                        {
+                            "source_file": str(memory.get("source_file", "")),
+                            "source_anchor": str(memory.get("source_anchor", "")),
+                            "title_hint": str(memory.get("title", ""))[:80],
+                            "reason": "already_indexed_candidate_uid",
+                        }
+                    )
+                    continue
+                candidates.append(self.review_candidate_from_memory(memory, body, "openclaw_distilled", "openclaw"))
+            distilled_count = len(distilled)
+
+        return {
+            "_meta": {
+                "schema": "memory-sync-agent-review-pack",
+                "generated_at": now_iso(),
+                "review_mode": "agent",
+                "candidate_count": len(candidates),
+                "copied_daily_count": len(copied_daily_files),
+                "distilled_candidate_count": distilled_count,
+                "instructions": [
+                    "The current agent must review candidates and produce decisions JSON.",
+                    "Keep only evidence-backed memories; do not invent facts outside candidate text.",
+                    "Use S2 for success patterns, corrections, failure lessons, and explicit user rules.",
+                    "Use merge_with when a candidate duplicates an existing memory.",
+                    "The script validates and writes decisions; it must keep OpenClaw source read-only.",
+                ],
+                "decision_schema": self.review_decision_schema(),
+            },
+            "processed_files": processed_files,
+            "copied_daily_files": copied_daily_files,
+            "skipped": skipped[:200],
+            "existing_memories": self.compact_existing_memories(),
+            "candidates": candidates,
+        }
+
+    def cmd_review_prepare(self) -> int:
+        try:
+            pack = self.build_review_pack()
+        except ValueError as exc:
+            self.log(f"ERROR {exc}")
+            return 1
+        path = self.review_pack_path()
+        self.write_json_atomic(path, pack)
+        self.log(f"Agent review pack written: {self.vault_rel(path)}")
+        self.log(f"Candidates: {pack['_meta']['candidate_count']}")
+        self.log("Next: current agent writes decisions JSON, then run:")
+        self.log("  python scripts/main.py review apply <decisions.json>")
+        return 0
+
+    def load_review_pack(self, pack_path: Path | None = None) -> dict[str, Any]:
+        path = pack_path or self.review_pack_path()
+        if not path.exists():
+            raise ValueError(f"review pack not found: {path}")
+        try:
+            pack = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"review pack is invalid JSON: {path} ({exc})") from exc
+        if pack.get("_meta", {}).get("schema") != "memory-sync-agent-review-pack":
+            raise ValueError(f"not a memory-sync review pack: {path}")
+        return pack
+
+    def load_review_decisions(self, decisions_path: Path) -> list[dict[str, Any]]:
+        if not decisions_path.exists():
+            raise ValueError(f"decisions file not found: {decisions_path}")
+        try:
+            payload = json.loads(decisions_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"decisions file is invalid JSON: {decisions_path} ({exc})") from exc
+        decisions = payload.get("decisions") if isinstance(payload, dict) else payload
+        if not isinstance(decisions, list):
+            raise ValueError("decisions JSON must be a list or an object with a decisions list")
+        return [item for item in decisions if isinstance(item, dict)]
+
+    def apply_review_decision(self, base: dict[str, Any], decision: dict[str, Any]) -> dict[str, Any]:
+        candidate = json.loads(json.dumps(base, ensure_ascii=False))
+        if str(decision.get("stage", candidate.get("stage", "S1"))) in STAGES:
+            candidate["stage"] = str(decision.get("stage", candidate.get("stage", "S1")))
+            candidate["expire_at"] = self.store.expire_at(candidate["stage"])
+        for field, limit in (("title", 120), ("summary", 500)):
+            text = str(decision.get(field, candidate.get(field, ""))).strip()
+            if text:
+                candidate[field] = text[:limit]
+        keywords = bounded_list(decision.get("keywords"), 18)
+        strong_keywords = bounded_list(decision.get("strong_keywords"), 10)
+        if keywords:
+            candidate["keywords"] = keywords
+        if strong_keywords:
+            candidate["strong_keywords"] = strong_keywords
+        candidate["quality_score"] = clamp_float(decision.get("quality_score"), float(candidate.get("quality_score", 0.75) or 0.75))
+        for field in ("memory_type", "lesson_type"):
+            value = str(decision.get(field, "")).strip()
+            if value:
+                candidate[field] = value
+        if candidate.get("memory_type") == "process_memory":
+            candidate["memory_lane"] = "process"
+            if STAGES.index(candidate.get("stage", "S1")) < STAGES.index("S2"):
+                candidate["stage"] = "S2"
+                candidate["expire_at"] = self.store.expire_at("S2")
+        candidate["review_mode"] = "agent"
+        candidate["reviewed_at"] = now_iso()
+        candidate["review_reason"] = str(decision.get("reason", "")).strip()
+        candidate["source_confidence"] = "agent_reviewed"
+        candidate["candidate_uid"] = candidate.get("candidate_uid") or candidate_uid(
+            "agent-review",
+            f"{candidate.get('source_file')}:{candidate.get('source_anchor')}",
+            candidate.get("summary", ""),
+        )
+        return candidate
+
+    def cmd_review_apply(self, decisions_path: Path, pack_path: Path | None = None) -> int:
+        try:
+            pack = self.load_review_pack(pack_path)
+            decisions = self.load_review_decisions(decisions_path)
+        except ValueError as exc:
+            self.log(f"ERROR {exc}")
+            return 1
+
+        by_id = {str(item.get("candidate_id")): item for item in pack.get("candidates", []) if item.get("candidate_id")}
+        decision_ids = {str(item.get("candidate_id", "")).strip() for item in decisions}
+        missing = sorted(set(by_id) - decision_ids)
+        if missing:
+            self.log("ERROR decisions do not cover every review candidate.")
+            self.log("Missing candidate_ids:")
+            for candidate_id in missing[:20]:
+                self.log(f"- {candidate_id}")
+            if len(missing) > 20:
+                self.log(f"- ... {len(missing) - 20} more")
+            return 1
+        stats: Counter[str] = Counter()
+        for decision in decisions:
+            candidate_id = str(decision.get("candidate_id", "")).strip()
+            pack_item = by_id.get(candidate_id)
+            if not pack_item:
+                stats["unknown"] += 1
+                self.log(f"SKIP unknown candidate_id: {candidate_id}")
+                continue
+            if decision.get("keep") is False:
+                stats["discarded"] += 1
+                continue
+            base = pack_item.get("base_memory")
+            if not isinstance(base, dict):
+                stats["invalid"] += 1
+                self.log(f"SKIP invalid base memory: {candidate_id}")
+                continue
+            candidate = self.apply_review_decision(base, decision)
+            merge_with = str(decision.get("merge_with", "")).strip()
+            if merge_with:
+                existing = self.store.memories().get(merge_with)
+                if existing:
+                    self.merge_memory(merge_with, existing, candidate, 1.0)
+                    stats["merged"] += 1
+                    continue
+                self.log(f"WARN merge_with not found, using normal duplicate check: {merge_with}")
+            _memory_id, action = self.add_or_merge(candidate)
+            stats[action] += 1
+
+        processed = self.store.data[INDEX_META].setdefault("processed_files", {})
+        for source, digest in pack.get("processed_files", {}).items():
+            if isinstance(source, str) and isinstance(digest, str):
+                processed[source] = digest
+
+        expired = self.apply_expiry()
+        copied = [self.vault_path / rel for rel in pack.get("copied_daily_files", []) if isinstance(rel, str)]
+        cleaned = self.clean_unrelated_daily_files(copied)
+        self.store.save()
+        self.write_obsidian_index()
+        if CONFIG["DERIVED_OUTPUTS_ENABLED"]:
+            self.refresh_derived_outputs()
+
+        self.log(
+            "Review apply complete: "
+            f"added={stats['added']}, merged={stats['merged']}, discarded={stats['discarded']}, "
+            f"unknown={stats['unknown']}, invalid={stats['invalid']}, expired={int(expired)}, cleaned={int(cleaned)}"
+        )
+        return 0
 
     def build_memory(
         self,
@@ -1759,6 +2114,15 @@ class MemorySync:
         return stats
 
     def cmd_sync(self) -> int:
+        if self.review_mode() == "rules":
+            return self.cmd_sync_rules()
+        self.log("Agent review mode is active; preparing review pack instead of rule-based indexing.")
+        result = self.cmd_review_prepare()
+        if result == 0:
+            self.log("No rule-based memories were written. Let the current agent review the pack and apply decisions.")
+        return result
+
+    def cmd_sync_rules(self) -> int:
         memory_dir = self.openclaw_path / DAILY_DIR
         if not memory_dir.exists():
             self.log(f"ERROR memory directory not found: {memory_dir}")
@@ -3482,6 +3846,11 @@ class MemorySync:
 
     def cmd_autopilot(self) -> int:
         self.log("Autopilot start")
+        if self.review_mode() == "agent":
+            result = self.cmd_review_prepare()
+            if result == 0:
+                self.log("Autopilot paused for agent review; run review apply after decisions are written.")
+            return result
         result = self.cmd_sync()
         if result != 0:
             return result
@@ -3502,6 +3871,8 @@ def usage() -> None:
     print("  python scripts/main.py search <keyword>")
     print("  python scripts/main.py diagnose <text>")
     print("  python scripts/main.py ingest <agent> [--stdin|--file path|--project path|text]")
+    print("  python scripts/main.py review prepare")
+    print("  python scripts/main.py review apply <decisions.json> [pack.json]")
     print("  python scripts/main.py handoff <agent>")
     print("  python scripts/main.py candidates [agent]")
     print("  python scripts/main.py trigger check <text>")
@@ -3561,6 +3932,21 @@ def main(argv: list[str] | None = None) -> int:
             print(f"ERROR {exc}")
             return 1
         return app.cmd_ingest(agent, text)
+    if command == "review":
+        if len(args) < 2 or args[1] not in {"prepare", "apply"}:
+            print("ERROR review requires: prepare or apply <decisions.json> [pack.json]")
+            return 1
+        if args[1] == "prepare":
+            if len(args) != 2:
+                print("ERROR review prepare takes no extra arguments")
+                return 1
+            return app.cmd_review_prepare()
+        if len(args) not in {3, 4}:
+            print("ERROR review apply requires: <decisions.json> [pack.json]")
+            return 1
+        decisions_path = expand_path(args[2])
+        pack_path = expand_path(args[3]) if len(args) == 4 else None
+        return app.cmd_review_apply(decisions_path, pack_path)
     if command == "handoff":
         if len(args) != 2:
             print("ERROR handoff requires: <agent>")
