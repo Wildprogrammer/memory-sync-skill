@@ -220,6 +220,10 @@ Personal/Agent Knowledge/openclaw/USER.md
 Personal/Agent Knowledge/openclaw/AGENTS.md
 Personal/Agent Knowledge/openclaw/TOOLS.md
 Personal/Agent Knowledge/codex/AGENTS.md
+Personal/Agent Knowledge/codex/config.toml
+Personal/Agent Knowledge/claude/CLAUDE.md
+Personal/Agent Knowledge/opencode/AGENTS.md
+Personal/Agent Knowledge/hermes-agent/AGENTS.md
 Personal/Agent Knowledge/Agent Skills.md
 Personal/Agent Knowledge/<agent>/Agent Skills.md
 ```
@@ -241,12 +245,71 @@ The skill inventory records skill name, function summary, agent, level/source di
 
 ## Trigger Logic
 
+- Trigger words do not make the skill auto-run by themselves. `trigger check` and `trigger hit` are diagnostic/reinforcement commands after an agent or user has already decided to query memory-sync.
 - `trigger check` is read-only.
 - `trigger hit` is the only command that updates hit counters.
 - Enforce one effective hit per memory per 24 hours.
 - Treat trigger words as activation signals only.
 - Require strong keyword evidence for a match.
 - Detect noisy single-trigger reinforcement and downgrade or remove weak memories.
+
+To make an agent automatically query this memory layer when the user mentions memory-related words, install an agent rule in that agent's own persistent rule file. Do not assume every agent uses OpenClaw's rule structure.
+
+Recommended rule entry points:
+
+| Agent | Rule entry point |
+| --- | --- |
+| OpenClaw | Workspace `AGENTS.md`, or the skill/workspace rule file that OpenClaw loads for the session |
+| Codex | Project `AGENTS.md`, or user-level `~/.codex/AGENTS.md` |
+| Claude Code | Project `CLAUDE.md`, project `.claude/CLAUDE.md`, or user-level `~/.claude/CLAUDE.md` |
+| OpenCode | Project `AGENTS.md`, user-level `~/.config/opencode/AGENTS.md`, or `CLAUDE.md` when using Claude-compatible instructions |
+| hermes-agent | Its configured system prompt/rule file; if there is no persistent rule file, provide `_shared/context/hermes-agent.md` as the handoff contract |
+
+OpenClaw example:
+
+````markdown
+### 记忆触发词自动检索
+
+当用户消息中包含以下触发词时，除了内置 `memory_search` 外，必须同时执行 memory-sync 的 search 命令。
+
+触发词：记得、记忆、回忆、上次、之前、以前、曾经、历史、背景、上下文、仔细想想、想起来、记录、复盘、经验、remember、memory、recall、previous、last time、context
+
+执行命令：
+
+```bash
+python /path/to/memory-sync/scripts/main.py search "关键词"
+```
+
+流程：
+
+1. 内置 `memory_search` 搜 OpenClaw 工作区。
+2. memory-sync `search` 搜 Obsidian 索引。
+3. 合并两个结果再回答。
+````
+
+Generic non-OpenClaw rule template:
+
+````markdown
+### Memory-Sync Automatic Retrieval
+
+When the user asks about memory, previous context, background, history, lessons, or prior decisions, query memory-sync before answering.
+
+Trigger words: 记得、记忆、回忆、上次、之前、以前、曾经、历史、背景、上下文、仔细想想、想起来、记录、复盘、经验、remember、memory、recall、previous、last time、context
+
+Command:
+
+```bash
+python /path/to/memory-sync/scripts/main.py search "keyword phrase"
+```
+
+Process:
+
+1. Use the agent's built-in memory/context search if it has one.
+2. Run memory-sync `search` against the Obsidian index.
+3. Merge the results, cite uncertainty, and answer from the combined evidence.
+````
+
+Use the user's actual keyword phrase as the query, not the whole chat transcript. If the memory-sync command fails, tell the user the failure and continue with the agent's built-in memory/context results when available.
 
 ## Configuration
 
@@ -265,6 +328,8 @@ MEMORY_SYNC_REVIEW_MODE=agent  # default
 MEMORY_SYNC_REVIEW_MODE=rules  # deterministic fallback
 ```
 
+- `MEMORY_SYNC_PROJECT_ROOTS`: optional path-list of project roots to scan for project-level `AGENTS.md`, `CLAUDE.md`, and `.claude/CLAUDE.md`.
+- `MEMORY_SYNC_AGENT_KNOWLEDGE_FILES`: optional path-list of extra rule/profile files to copy into `Personal/Agent Knowledge/custom/` and use as profile evidence.
 - `filters.json`: minimum segment length, source blacklist, text blacklist, and OpenClaw import thresholds.
 - `keywords.json`: generic words, broad context words, domain phrases, blocked keyword patterns, and `strong_keyword_allowlist`.
 - `triggers.json`: words that activate memory checks.
@@ -305,7 +370,7 @@ _shared/context/opencode.md
 _shared/context/hermes-agent.md
 ```
 
-OpenClaw and hermes-agent context files include an operating contract: read `AGENTS.md`, `USER.md`, `MEMORY.md`, and recent daily memory when available; report missing rule files; surface safety or instruction conflicts; and never delete OpenClaw source memory.
+Each adapter context includes a memory retrieval contract that points to that agent's own rule entry point. OpenClaw uses `AGENTS.md`; Codex uses `AGENTS.md`; Claude Code uses `CLAUDE.md`; OpenCode uses `AGENTS.md` or Claude-compatible rules; hermes-agent uses its configured rule/system prompt or `_shared/context/hermes-agent.md` as a handoff contract. OpenClaw and hermes-agent also include stricter operating contracts for rule reading, conflict reporting, and source-memory safety.
 
 Agent-local outputs:
 

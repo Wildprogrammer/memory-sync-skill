@@ -35,6 +35,13 @@ MEMORY_PAGES_DIR = "03-Reference/Memories"
 CONTEXT_DIR = "_context"
 CONTEXT_JSON = f"{CONTEXT_DIR}/agent_context.json"
 ADAPTER_NAMES = ("codex", "claude", "openclaw", "opencode", "hermes-agent")
+AGENT_RULE_ENTRYPOINTS = {
+    "openclaw": ["workspace AGENTS.md", "skill/workspace rule file loaded by OpenClaw"],
+    "codex": ["project AGENTS.md", "~/.codex/AGENTS.md"],
+    "claude": ["project CLAUDE.md", "project .claude/CLAUDE.md", "~/.claude/CLAUDE.md"],
+    "opencode": ["project AGENTS.md", "~/.config/opencode/AGENTS.md", "CLAUDE.md compatibility file when used"],
+    "hermes-agent": ["configured system prompt or rule file", "_shared/context/hermes-agent.md handoff when no persistent rule file exists"],
+}
 AGENTS_DIR = "_agents"
 SHARED_DIR = "_shared"
 SHARED_CONTEXT_DIR = f"{SHARED_DIR}/context"
@@ -992,8 +999,6 @@ def title_from_ingest(content: str, agent: str) -> str:
 
 def stage_for_agent_ingest(content: str) -> str:
     lowered = content.lower()
-    if classify_process_memory(content):
-        return "S2"
     strong_markers = [
         "decision",
         "decided",
@@ -1580,6 +1585,14 @@ class MemorySync:
         self.log("  python scripts/main.py review apply <decisions.json>")
         return 0
 
+    def prepare_agent_review(self, caller: str = "review") -> int:
+        if caller != "review":
+            self.log("Agent review mode is active; preparing review pack instead of rule-based indexing.")
+        result = self.cmd_review_prepare()
+        if result == 0 and caller != "review":
+            self.log("No rule-based memories were written. Let the current agent review the pack and apply decisions.")
+        return result
+
     def load_review_pack(self, pack_path: Path | None = None) -> dict[str, Any]:
         path = pack_path or self.review_pack_path()
         if not path.exists():
@@ -1676,7 +1689,8 @@ class MemorySync:
                 self.log(f"SKIP invalid base memory: {candidate_id}")
                 continue
             candidate = self.apply_review_decision(base, decision)
-            merge_with = str(decision.get("merge_with", "")).strip()
+            raw_merge_with = decision.get("merge_with")
+            merge_with = str(raw_merge_with).strip() if raw_merge_with is not None else ""
             if merge_with:
                 existing = self.store.memories().get(merge_with)
                 if existing:
@@ -1695,10 +1709,7 @@ class MemorySync:
         expired = self.apply_expiry()
         copied = [self.vault_path / rel for rel in pack.get("copied_daily_files", []) if isinstance(rel, str)]
         cleaned = self.clean_unrelated_daily_files(copied)
-        self.store.save()
-        self.write_obsidian_index()
-        if CONFIG["DERIVED_OUTPUTS_ENABLED"]:
-            self.refresh_derived_outputs()
+        self.persist_index_outputs(save_index=True)
 
         self.log(
             "Review apply complete: "
@@ -2116,11 +2127,7 @@ class MemorySync:
     def cmd_sync(self) -> int:
         if self.review_mode() == "rules":
             return self.cmd_sync_rules()
-        self.log("Agent review mode is active; preparing review pack instead of rule-based indexing.")
-        result = self.cmd_review_prepare()
-        if result == 0:
-            self.log("No rule-based memories were written. Let the current agent review the pack and apply decisions.")
-        return result
+        return self.prepare_agent_review("sync")
 
     def cmd_sync_rules(self) -> int:
         memory_dir = self.openclaw_path / DAILY_DIR
@@ -2168,11 +2175,7 @@ class MemorySync:
         expired = self.apply_expiry()
         cleaned = self.clean_unrelated_daily_files(unrelated_files)
         changed = changed_files > 0 or memory_stats["added"] > 0 or memory_stats["merged"] > 0 or expired or cleaned
-        if changed:
-            self.store.save()
-        self.write_obsidian_index()
-        if CONFIG["DERIVED_OUTPUTS_ENABLED"]:
-            self.refresh_derived_outputs()
+        self.persist_index_outputs(save_index=changed)
 
         self.log(
             "Sync complete: "
@@ -2357,9 +2360,7 @@ class MemorySync:
             changed += 1
             self.log(f"HIT {memory_id} quality={quality:.2f} keywords={', '.join(matched)}")
 
-        self.store.save()
-        self.write_obsidian_index()
-        self.write_obsidian_surfaces()
+        self.persist_index_outputs(save_index=True)
         self.log(f"Trigger hit complete: changed={changed}")
         return 0
 
@@ -2843,8 +2844,8 @@ class MemorySync:
         if explicit in {"en", "english"}:
             return "en"
         evidence = []
-        for rel in ("USER.md", "AGENTS.md", "MEMORY.md"):
-            evidence.append(self.read_optional_text(self.openclaw_path / rel, limit=20000))
+        for item in self.agent_knowledge_sources():
+            evidence.append(self.read_optional_text(Path(item["path"]), limit=20000))
         evidence.append(self.read_optional_text(self.vault_path / PROFILE_MD_FILE, limit=20000))
         text = "\n".join(evidence)
         if contains_cjk(text):
@@ -2956,24 +2957,19 @@ class MemorySync:
         return "\n".join(lines).rstrip() + "\n"
 
     def sync_personal_knowledge_base(self) -> None:
-        sources = [
-            ("openclaw", self.openclaw_path / "MEMORY.md"),
-            ("openclaw", self.openclaw_path / "USER.md"),
-            ("openclaw", self.openclaw_path / "AGENTS.md"),
-            ("openclaw", self.openclaw_path / "TOOLS.md"),
-            ("codex", Path.home() / ".codex" / "AGENTS.md"),
-            ("codex", Path.home() / ".codex" / "config.toml"),
-        ]
-        for agent, source in sources:
+        for item in self.agent_knowledge_sources():
+            agent = str(item["agent"])
+            source = Path(item["path"])
             if not source.exists() or not source.is_file():
                 continue
-            target = self.vault_path / PERSONAL_KNOWLEDGE_DIR / agent / source.name
+            target = self.vault_path / PERSONAL_KNOWLEDGE_DIR / agent / self.agent_knowledge_target_name(item)
             body = source.read_text(encoding="utf-8", errors="replace")
             content = "\n".join(
                 [
                     "---",
                     "type: agent_knowledge_source",
                     f"agent: {agent}",
+                    f"source_label: {item.get('label', '')}",
                     f"source_path: {source.as_posix()}",
                     f"generated_at: {now_iso()}",
                     "---",
@@ -3028,6 +3024,14 @@ class MemorySync:
             self.write_agent_context("all", profile=profile, context=context)
         self.write_shared_layer(profile=profile, context=context)
         self.write_obsidian_surfaces(profile=profile, context=context)
+
+    def persist_index_outputs(self, save_index: bool = True) -> None:
+        if save_index:
+            self.store.save()
+        if CONFIG["DERIVED_OUTPUTS_ENABLED"]:
+            self.refresh_derived_outputs()
+        else:
+            self.write_obsidian_index()
 
     def git_run(self, args: list[str], check: bool = False) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
@@ -3176,35 +3180,66 @@ class MemorySync:
             return ""
         return path.read_text(encoding="utf-8", errors="replace")[:limit]
 
+    def agent_knowledge_sources(self) -> list[dict[str, Any]]:
+        home = Path.home()
+        sources: list[dict[str, Any]] = [
+            {"agent": "openclaw", "label": "workspace", "path": self.openclaw_path / "MEMORY.md", "weight": 0.85},
+            {"agent": "openclaw", "label": "workspace", "path": self.openclaw_path / "USER.md", "weight": 1.0},
+            {"agent": "openclaw", "label": "workspace", "path": self.openclaw_path / "AGENTS.md", "weight": 0.9},
+            {"agent": "openclaw", "label": "workspace", "path": self.openclaw_path / "TOOLS.md", "weight": 0.55},
+            {"agent": "openclaw", "label": "workspace", "path": self.openclaw_path / "SOUL.md", "weight": 0.4},
+            {"agent": "codex", "label": "user", "path": home / ".codex" / "AGENTS.md", "weight": 0.75},
+            {"agent": "codex", "label": "user", "path": home / ".codex" / "config.toml", "weight": 0.5},
+            {"agent": "codex", "label": "user", "path": home / ".codex" / "rules" / "default.rules", "weight": 0.55},
+            {"agent": "claude", "label": "user", "path": home / ".claude" / "CLAUDE.md", "weight": 0.75},
+            {"agent": "opencode", "label": "user", "path": home / ".config" / "opencode" / "AGENTS.md", "weight": 0.75},
+            {"agent": "opencode", "label": "windows-user", "path": home / "AppData" / "Roaming" / "opencode" / "AGENTS.md", "weight": 0.75},
+            {"agent": "hermes-agent", "label": "user", "path": home / ".hermes-agent" / "AGENTS.md", "weight": 0.65},
+        ]
+
+        for raw in [item for item in os.environ.get("MEMORY_SYNC_PROJECT_ROOTS", "").split(os.pathsep) if item.strip()]:
+            root = expand_path(raw)
+            project = re.sub(r"[^A-Za-z0-9_.-]+", "-", root.name).strip("-") or "project"
+            for agent, rel, weight in [
+                ("codex", "AGENTS.md", 0.7),
+                ("openclaw", "AGENTS.md", 0.7),
+                ("opencode", "AGENTS.md", 0.7),
+                ("claude", "CLAUDE.md", 0.7),
+                ("claude", ".claude/CLAUDE.md", 0.7),
+            ]:
+                sources.append(
+                    {
+                        "agent": agent,
+                        "label": f"project-{project}-{rel.replace('/', '-')}",
+                        "path": root / rel,
+                        "weight": weight,
+                    }
+                )
+
+        for index, raw in enumerate([item for item in os.environ.get("MEMORY_SYNC_AGENT_KNOWLEDGE_FILES", "").split(os.pathsep) if item.strip()], start=1):
+            sources.append({"agent": "custom", "label": f"extra-{index}", "path": expand_path(raw), "weight": 0.45})
+        return sources
+
+    def agent_knowledge_target_name(self, item: dict[str, Any]) -> str:
+        path = Path(item["path"])
+        label = str(item.get("label", "")).strip()
+        if label in {"workspace", "user"}:
+            return path.name
+        safe = re.sub(r"[^A-Za-z0-9_.-]+", "-", label).strip("-") or "source"
+        return f"{safe}-{path.name}"
+
     def collect_profile_sources(self) -> list[tuple[str, str, float]]:
         sources: list[tuple[str, str, float]] = []
-        for rel, weight in [
-            ("USER.md", 1.0),
-            ("AGENTS.md", 0.9),
-            ("MEMORY.md", 0.85),
-            ("TOOLS.md", 0.55),
-            ("SOUL.md", 0.4),
-        ]:
-            path = self.openclaw_path / rel
+        for item in self.agent_knowledge_sources():
+            path = Path(item["path"])
             text = self.read_optional_text(path)
             if text:
-                sources.append((f"openclaw:{rel}", text, weight))
-
-        codex_home = Path.home() / ".codex"
-        for rel, weight in [
-            ("AGENTS.md", 0.75),
-            ("config.toml", 0.5),
-            ("rules/default.rules", 0.55),
-        ]:
-            path = codex_home / rel
-            text = self.read_optional_text(path)
-            if text:
-                sources.append((f"codex:{rel}", text, weight))
+                sources.append((f"{item['agent']}:{item['label']}:{path.name}", text, float(item["weight"])))
 
         skill_doc = ROOT / "SKILL.md"
         text = self.read_optional_text(skill_doc)
         if text:
-            sources.append(("codex:memory-sync/SKILL.md", text, 0.45))
+            sources.append(("memory-sync:SKILL.md", text, 0.45))
         return sources
 
     def add_rule_signals(self, profile: dict[str, Any], source: str, text: str, base_weight: float) -> None:
@@ -3466,7 +3501,7 @@ class MemorySync:
             "do_not_assume": summary.get("do_not_assume", [])[:8],
             "memory_snapshot": self.memory_snapshot(shared_only=True),
             "instruction_contract": {
-                "applies_to": ["openclaw", "hermes-agent"],
+                "applies_to": ["openclaw"],
                 "must_read": ["AGENTS.md", "USER.md", "MEMORY.md", "memory/today-and-yesterday"],
                 "conflict_protocol": [
                     "If AGENTS.md/USER.md cannot be read, say so explicitly instead of pretending.",
@@ -3474,6 +3509,14 @@ class MemorySync:
                     "If a requested action conflicts with AGENTS.md safety rules, surface the conflict before acting.",
                     "Never delete OpenClaw source memory; memory-sync cleanup operates on Obsidian copies and derived outputs.",
                 ],
+            },
+            "memory_retrieval_contract": {
+                "trigger_words": TRIGGER_WORDS,
+                "query_policy": "Use the user's actual keyword phrase, not the full transcript. Combine built-in memory/context search with memory-sync search when the agent has built-in memory.",
+                "command_template": "python <memory-sync>/scripts/main.py search \"<keyword phrase>\"",
+                "rule_entrypoints": {
+                    **AGENT_RULE_ENTRYPOINTS,
+                },
             },
             "skill_inventory": {
                 "path": SHARED_AGENT_SKILLS_JSON,
@@ -3504,13 +3547,26 @@ class MemorySync:
             "brief": "Agent Brief",
         }.get(adapter, adapter)
         lines = [f"# {title}", "", f"Generated: {context['_meta']['generated_at']}", "", "## User Brief", "", context.get("profile_brief", ""), ""]
+        retrieval = context.get("memory_retrieval_contract", {})
+        entrypoints = retrieval.get("rule_entrypoints", {}).get(adapter, [])
+        if adapter in ADAPTER_NAMES:
+            lines.extend([
+                "## Memory Retrieval Contract",
+                "",
+                f"- Install automatic memory-trigger rules in: {', '.join(entrypoints) if entrypoints else 'the agent persistent rule file'}.",
+                "- Trigger words are activation signals; they do not make memory-sync run unless the agent rule explicitly calls it.",
+                "- Search with the user's actual keyword phrase, not the full transcript.",
+                "- If the agent has built-in memory/context search, combine it with memory-sync search before answering.",
+                f"- Command template: `{retrieval.get('command_template', 'python <memory-sync>/scripts/main.py search \"<keyword phrase>\"')}`",
+                "",
+            ])
         if adapter == "hermes-agent":
             lines.extend([
                 "## Operating Contract",
                 "",
-                "- Before acting, read AGENTS.md, USER.md, MEMORY.md, and today's/yesterday's daily memory when available.",
-                "- If a required rule file is missing or unreadable, report it explicitly.",
-                "- If instructions conflict with safety rules or AGENTS.md, explain the conflict and follow the higher-priority rule.",
+                "- Before acting, read the configured hermes-agent rule/system prompt, user profile, memory snapshot, and available handoff context.",
+                "- If a required rule file or handoff context is missing or unreadable, report it explicitly.",
+                "- If instructions conflict with safety rules or the configured agent contract, explain the conflict and follow the higher-priority rule.",
                 "- Do not claim to have followed a local rule unless the rule source was actually read.",
                 "",
                 "## Handoff Protocol",
@@ -3812,6 +3868,10 @@ class MemorySync:
             issues.append("missing _shared directory")
         if not (self.vault_path / SHARED_CONTEXT_DIR).exists():
             issues.append("missing _shared/context directory")
+        else:
+            for adapter in ADAPTER_NAMES:
+                if not (self.vault_path / SHARED_CONTEXT_DIR / f"{adapter}.md").exists():
+                    issues.append(f"missing shared context adapter: {adapter}")
         if not (self.vault_path / SHARED_AGENT_SKILLS_JSON).exists():
             issues.append("missing shared agent skill inventory")
         for rel in ("AGENTS.md", "USER.md"):
@@ -3819,6 +3879,21 @@ class MemorySync:
                 issues.append(f"missing OpenClaw rule/profile source: {rel}")
         if not (self.vault_path / PERSONAL_KNOWLEDGE_DIR / "openclaw" / "MEMORY.md").exists():
             issues.append("missing Personal Agent Knowledge copy of OpenClaw MEMORY.md")
+        existing_rule_agents = {
+            str(item["agent"])
+            for item in self.agent_knowledge_sources()
+            if Path(item["path"]).exists() and Path(item["path"]).is_file()
+        }
+        for adapter in ADAPTER_NAMES:
+            skill_count = 0
+            skills_path = self.agent_dir(adapter) / "skills.json"
+            if skills_path.exists():
+                try:
+                    skill_count = int(json.loads(skills_path.read_text(encoding="utf-8")).get("_meta", {}).get("record_count", 0))
+                except (json.JSONDecodeError, ValueError, TypeError):
+                    skill_count = 0
+            if adapter not in existing_rule_agents and (self.agent_memories(adapter) or skill_count > 0):
+                issues.append(f"no persistent rule/profile source found for {adapter}; add one or configure MEMORY_SYNC_PROJECT_ROOTS/MEMORY_SYNC_AGENT_KNOWLEDGE_FILES")
         if len(profile.get("summary", {}).get("communication_style", [])) == 0:
             issues.append("communication_style has no signals")
         if len(profile.get("summary", {}).get("active_projects", [])) == 0:
@@ -3847,10 +3922,7 @@ class MemorySync:
     def cmd_autopilot(self) -> int:
         self.log("Autopilot start")
         if self.review_mode() == "agent":
-            result = self.cmd_review_prepare()
-            if result == 0:
-                self.log("Autopilot paused for agent review; run review apply after decisions are written.")
-            return result
+            return self.prepare_agent_review("autopilot")
         result = self.cmd_sync()
         if result != 0:
             return result
