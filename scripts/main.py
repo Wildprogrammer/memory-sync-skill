@@ -34,13 +34,14 @@ MEMORY_DASHBOARD_FILE = "03-Reference/Memory Dashboard.md"
 MEMORY_PAGES_DIR = "03-Reference/Memories"
 CONTEXT_DIR = "_context"
 CONTEXT_JSON = f"{CONTEXT_DIR}/agent_context.json"
-ADAPTER_NAMES = ("codex", "claude", "openclaw", "opencode", "hermes-agent")
+ADAPTER_NAMES = ("codex", "claude", "openclaw", "opencode", "hermes-agent", "qoder")
 AGENT_RULE_ENTRYPOINTS = {
     "openclaw": ["workspace AGENTS.md", "skill/workspace rule file loaded by OpenClaw"],
     "codex": ["project AGENTS.md", "~/.codex/AGENTS.md"],
     "claude": ["project CLAUDE.md", "project .claude/CLAUDE.md", "~/.claude/CLAUDE.md"],
     "opencode": ["project AGENTS.md", "~/.config/opencode/AGENTS.md", "CLAUDE.md compatibility file when used"],
     "hermes-agent": ["configured system prompt or rule file", "_shared/context/hermes-agent.md handoff when no persistent rule file exists"],
+    "qoder": ["Qoder user/project rules when configured", "_shared/context/qoder.md handoff when no persistent rule file exists"],
 }
 AGENTS_DIR = "_agents"
 SHARED_DIR = "_shared"
@@ -61,6 +62,8 @@ STAGES = ("S1", "S2", "S3", "S4")
 PREVIOUS_STAGE = {"S2": "S1", "S3": "S2"}
 RESERVED_INDEX_KEYS = {INDEX_META, "memories", "daily_refs", "processed_dates", "version", "updated_at"}
 AGENT_DAILY_PATTERN = re.compile(rf"^{re.escape(AGENTS_DIR)}/[^/]+/daily/")
+AGENT_EVIDENCE_PATTERN = re.compile(rf"^{re.escape(AGENTS_DIR)}/[^/]+/evidence/")
+AGENT_CONVERSATION_PATTERN = re.compile(rf"^{re.escape(AGENTS_DIR)}/[^/]+/conversations/")
 AGENT_SUMMARY_PATTERN = re.compile(rf"^{re.escape(AGENTS_DIR)}/[^/]+/summaries/")
 DERIVED_SOURCE_PREFIXES = (
     "_index/",
@@ -606,7 +609,13 @@ CONFIG = {
     "LEGACY_CONTEXT_ENABLED": env_bool("LEGACY_CONTEXT_ENABLED", False),
     "DERIVED_OUTPUTS_ENABLED": env_bool("DERIVED_OUTPUTS_ENABLED", True),
     "REVIEW_MODE": os.environ.get("MEMORY_SYNC_REVIEW_MODE", "agent").strip().lower() or "agent",
+    "CODEX_HOME": os.environ.get("CODEX_HOME", "~/.codex"),
+    "CLAUDE_HOME": os.environ.get("CLAUDE_HOME", "~/.claude"),
+    "HERMES_HOME": os.environ.get("HERMES_HOME", "~/.hermes"),
+    "QODER_HOME": os.environ.get("QODER_HOME", os.environ.get("APPDATA", "") + "/Qoder"),
 }
+
+CONTEXT_ADAPTER_LIST = "|".join(("all", *ADAPTER_NAMES))
 
 
 def now_iso() -> str:
@@ -620,6 +629,18 @@ def parse_time(value: str | None) -> datetime | None:
         return datetime.fromisoformat(value)
     except ValueError:
         return None
+
+
+def parse_jsonl_time(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed
+    return parsed.astimezone()
 
 
 def expand_path(value: str) -> Path:
@@ -737,6 +758,10 @@ def source_type_for(value: str | None) -> str:
         return "daily_copy"
     if AGENT_DAILY_PATTERN.match(source):
         return "agent_daily"
+    if AGENT_EVIDENCE_PATTERN.match(source):
+        return "agent_evidence"
+    if AGENT_CONVERSATION_PATTERN.match(source):
+        return "agent_conversation"
     if source.startswith(f"{PERSONAL_KNOWLEDGE_DIR}/"):
         return "personal_knowledge"
     if source.startswith(f"{PERMANENT_DIR}/"):
@@ -760,6 +785,8 @@ def is_allowed_memory_source(value: str | None) -> bool:
     return source_type_for(value) in {
         "daily_copy",
         "agent_daily",
+        "agent_evidence",
+        "agent_conversation",
         "personal_knowledge",
         "permanent",
         "openclaw_distilled",
@@ -982,6 +1009,57 @@ def split_segments(content: str) -> list[tuple[str, str, str]]:
     return result
 
 
+def split_conversation_turns(content: str) -> list[tuple[str, str, str]]:
+    lines = content.splitlines()
+    turns: list[tuple[str, list[str], int]] = []
+    current_title = ""
+    current: list[str] = []
+    start_line = 1
+    heading_re = re.compile(r"^###\s+.+\s+(User|Assistant)\s*$")
+
+    def flush(end_line: int) -> None:
+        nonlocal current_title, current, start_line
+        body = "\n".join(current).strip()
+        if current_title and body:
+            turns.append((current_title, current[:], start_line))
+        current_title = ""
+        current = []
+        start_line = end_line + 1
+
+    for idx, line in enumerate(lines, start=1):
+        if heading_re.match(line.strip()):
+            flush(idx - 1)
+            current_title = line.strip().lstrip("#").strip()
+            current = [line]
+            start_line = idx
+            continue
+        if current_title:
+            current.append(line)
+    flush(len(lines))
+
+    result: list[tuple[str, str, str]] = []
+    for title, body_lines, start in turns:
+        body = "\n".join(body_lines).strip()
+        end = start + len(body_lines) - 1
+        result.append((title, body, f"line {start}-{end}"))
+    return result
+
+
+def title_from_conversation_turn(agent: str, turn_title: str, body: str) -> str:
+    role = "message"
+    role_match = re.search(r"\b(User|Assistant)\b", turn_title)
+    if role_match:
+        role = role_match.group(1).lower()
+    for raw in body.splitlines()[1:]:
+        line = raw.strip(" #\t-")
+        if not line or line.startswith(("_Source line:", "<details>", "<summary>")):
+            continue
+        line = re.sub(r"^(User|Assistant):\s*", "", line).strip()
+        if line:
+            return f"{agent} {role}: {line[:90]}"
+    return f"{agent} {role}: {turn_title}"
+
+
 def first_title(content: str) -> str:
     for line in content.splitlines():
         text = line.strip(" #\t")
@@ -1074,6 +1152,10 @@ def ingest_index_body(summary: str, source_file: str, source_anchor: str) -> str
 def extract_excerpt(content: str, limit: int = 900) -> str:
     text = re.sub(r"\n{3,}", "\n\n", content.strip())
     return text[:limit].rstrip() + ("\n..." if len(text) > limit else "")
+
+
+def evidence_limit_for_stage(stage: str) -> int:
+    return 6000 if stage in {"S2", "S3", "S4"} else 1200
 
 
 def title_from_ingest(content: str, agent: str) -> str:
@@ -1207,9 +1289,113 @@ def extract_keywords(content: str, limit: int = 10) -> list[str]:
     return extract_keyword_profile(content, limit=limit)["keywords"]
 
 
+def cjk_query_terms(text: str) -> list[str]:
+    terms: set[str] = set()
+    for chunk in re.findall(r"[\u4e00-\u9fff]{2,24}", text):
+        if is_generic_keyword(chunk):
+            continue
+        terms.add(chunk)
+        max_size = min(6, len(chunk))
+        for size in range(2, max_size + 1):
+            for index in range(0, len(chunk) - size + 1):
+                token = chunk[index : index + size]
+                if not is_generic_keyword(token):
+                    terms.add(token)
+    return sorted(terms, key=lambda item: (-len(item), item))
+
+
+def search_terms_for_query(query: str) -> list[str]:
+    terms: set[str] = set()
+    lowered = query.lower()
+    for token in re.split(r"[\s,，。.!！?？;；:：/\\|()\[\]{}<>]+", lowered):
+        token = normalize_keyword(token)
+        if token and not is_generic_keyword(token):
+            terms.add(token)
+    profile = extract_keyword_profile(query, limit=24)
+    for token in profile["strong_keywords"] + profile["keywords"]:
+        token = normalize_keyword(token)
+        if token and not is_generic_keyword(token):
+            terms.add(token)
+    terms.update(cjk_query_terms(query))
+    return sorted(terms, key=lambda item: (-len(item), item))
+
+
 def compact_text(value: str, limit: int = 180) -> str:
     text = re.sub(r"\s+", " ", value).strip()
     return text[:limit].rstrip() + ("..." if len(text) > limit else "")
+
+
+def truncate_text(value: str, limit: int = 4000) -> str:
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "\n\n...[truncated]"
+
+
+def important_grounding_tokens(text: str) -> set[str]:
+    tokens: set[str] = set()
+    for pattern in (
+        r"https?://[^\s`)\]]+",
+        r"\b[A-Za-z]:[\\/][^\s`)\]]+",
+        r"\b[\w.-]+\.(?:py|md|json|jsonl|toml|yaml|yml|sqlite|db|tsx?|jsx?|vue|onnx)\b",
+        r"\b[A-Za-z][A-Za-z0-9_-]*\d[A-Za-z0-9_-]*\b",
+        r"\b[A-Za-z][A-Za-z0-9_-]*[-_][A-Za-z0-9_-]+\b",
+    ):
+        for match in re.findall(pattern, text, re.IGNORECASE):
+            tokens.add(normalize_keyword(str(match)))
+    return {token for token in tokens if token and not is_generic_keyword(token)}
+
+
+def critical_claim_markers(text: str) -> set[str]:
+    markers = {
+        "未安装",
+        "缺失",
+        "投递失败",
+        "失败",
+        "已修复",
+        "修复",
+        "验证通过",
+        "不兼容",
+        "兼容",
+        "超时",
+        "403",
+        "fetch failed",
+        "enabled",
+        "disabled",
+    }
+    lowered = text.lower()
+    return {marker for marker in markers if marker.lower() in lowered}
+
+
+def critical_marker_supported(marker: str, evidence: str) -> bool:
+    aliases = {
+        "未安装": ["未安装", "没有安装", "未装"],
+        "缺失": ["缺失", "缺少", "没有"],
+        "投递失败": ["投递失败", "推送失败", "发送失败"],
+        "已修复": ["已修复", "修复完成", "已解决"],
+        "验证通过": ["验证通过", "测试通过", "passed"],
+        "不兼容": ["不兼容", "不能兼容"],
+        "fetch failed": ["fetch failed", "fetch失败"],
+    }
+    lowered = evidence.lower()
+    return any(alias.lower() in lowered for alias in aliases.get(marker, [marker]))
+
+
+def evidence_has_conflicting_polarity(evidence: str, claim: str) -> bool:
+    evidence_lower = evidence.lower()
+    claim_lower = claim.lower()
+    negative = {"失败", "缺失", "未安装", "不可用", "不兼容", "disabled", "error"}
+    positive = {"成功", "运行正常", "验证通过", "可用", "兼容", "enabled", "passed"}
+    if any(item in claim_lower for item in negative) and not any(item in evidence_lower for item in negative):
+        return any(item in evidence_lower for item in positive)
+    if any(item in claim_lower for item in positive) and not any(item in evidence_lower for item in positive):
+        return any(item in evidence_lower for item in negative)
+    return False
+
+
+def markdown_heading_text(value: str, fallback: str = "Untitled") -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    return text[:80] if text else fallback
 
 
 def bounded_list(value: Any, limit: int = 16) -> list[str]:
@@ -1478,6 +1664,17 @@ class MemorySync:
     def review_pack_path(self) -> Path:
         return self.vault_path / REVIEW_DIR / REVIEW_PACK_NAME
 
+    def clear_review_pack(self) -> None:
+        path = self.review_pack_path()
+        if path.exists():
+            path.unlink()
+        parent = path.parent
+        try:
+            if parent.exists() and not any(parent.iterdir()):
+                parent.rmdir()
+        except OSError:
+            pass
+
     def review_candidate_id(self, source_file: str, anchor: str, text: str) -> str:
         digest = hashlib.sha1(f"{source_file}|{anchor}|{text}".encode("utf-8", errors="ignore")).hexdigest()[:16]
         safe_source = re.sub(r"[^A-Za-z0-9_.-]+", "-", source_file).strip("-")
@@ -1497,7 +1694,8 @@ class MemorySync:
                     "quality_score": 0.0,
                     "memory_type": "optional, e.g. process_memory",
                     "lesson_type": "optional: success_pattern|correction|failure_lesson|user_rule",
-                    "merge_with": "optional existing memory id",
+                    "merge_with": "optional existing memory id or candidate_id from this pack",
+                    "replace_summary": False,
                     "reason": "why this should be kept, discarded, or merged",
                 }
             ]
@@ -1551,6 +1749,71 @@ class MemorySync:
                 }
             )
         return rows
+
+    def collect_conversation_archive_candidates(
+        self,
+        existing_uids: set[str],
+        processed: dict[str, str],
+    ) -> tuple[list[dict[str, Any]], dict[str, str], list[dict[str, str]], Counter[str]]:
+        candidates: list[dict[str, Any]] = []
+        processed_files: dict[str, str] = {}
+        skipped: list[dict[str, str]] = []
+        coverage: Counter[str] = Counter()
+        base = self.vault_path / AGENTS_DIR
+        if not base.exists():
+            return candidates, processed_files, skipped, coverage
+
+        for path in sorted(base.glob("*/conversations/*/*.md")):
+            rel = self.vault_rel(path)
+            parts = rel.split("/")
+            if len(parts) < 5:
+                continue
+            agent = parts[1]
+            digest = file_hash(path)
+            coverage["conversation_files_scanned"] += 1
+            if processed.get(rel) == digest:
+                continue
+            text = path.read_text(encoding="utf-8", errors="replace")
+            processed_files[rel] = digest
+            for title, body, anchor in split_conversation_turns(text):
+                coverage["conversation_segments_seen"] += 1
+                reason = noise_reason_for_text(body)
+                high_value_reason = high_value_reason_for_text(body)
+                compact = re.sub(r"\s+", "", body)
+                if (reason and not high_value_reason) or len(compact) < 80:
+                    skipped.append(
+                        {
+                            "source_file": rel,
+                            "source_anchor": anchor,
+                            "title_hint": title[:80],
+                            "reason": reason or "too_short_for_agent_review",
+                            "high_value_reason": high_value_reason or "",
+                        }
+                    )
+                    continue
+                memory = self.build_memory(title, body, rel, anchor, rel)
+                memory["title"] = title_from_conversation_turn(agent, title, body)
+                memory["source_agent"] = agent
+                memory["candidate_origin"] = f"{agent}-conversation-archive"
+                memory["candidate_uid"] = candidate_uid(memory["candidate_origin"], f"{rel}:{anchor}", body)
+                memory["memory_lane"] = "conversation"
+                memory["context_storage_policy"] = "archive_then_review"
+                memory["original_context_file"] = rel
+                memory["original_context_anchor"] = anchor
+                if memory["candidate_uid"] in existing_uids:
+                    skipped.append(
+                        {
+                            "source_file": rel,
+                            "source_anchor": anchor,
+                            "title_hint": title[:80],
+                            "reason": "already_indexed_candidate_uid",
+                            "high_value_reason": high_value_reason or "",
+                        }
+                    )
+                    continue
+                coverage["conversation_candidates"] += 1
+                candidates.append(self.review_candidate_from_memory(memory, body, "agent_conversation", agent))
+        return candidates, processed_files, skipped, coverage
 
     def build_review_pack(self) -> dict[str, Any]:
         memory_dir = self.openclaw_path / DAILY_DIR
@@ -1648,6 +1911,13 @@ class MemorySync:
                 coverage["distilled_candidates"] += 1
                 candidates.append(self.review_candidate_from_memory(memory, body, "openclaw_distilled", "openclaw"))
             distilled_count = len(distilled)
+        conversation_candidates, conversation_processed, conversation_skipped, conversation_coverage = (
+            self.collect_conversation_archive_candidates(existing_uids, processed)
+        )
+        candidates.extend(conversation_candidates)
+        processed_files.update(conversation_processed)
+        skipped.extend(conversation_skipped)
+        coverage.update(conversation_coverage)
         coverage["candidate_count"] = len(candidates)
         coverage["skipped_count"] = len(skipped)
 
@@ -1660,6 +1930,7 @@ class MemorySync:
                 "copied_daily_count": len(copied_daily_files),
                 "distilled_candidate_count": distilled_count,
                 "session_curated_candidate_count": session_curated_count,
+                "conversation_candidate_count": len(conversation_candidates),
                 "coverage": dict(coverage),
                 "instructions": [
                     "The current agent must review candidates and produce decisions JSON.",
@@ -1686,6 +1957,7 @@ class MemorySync:
         path = self.review_pack_path()
         self.write_json_atomic(path, pack)
         self.log(f"Agent review pack written: {self.vault_rel(path)}")
+        self.log(f"Agent review pack absolute path: {path}")
         self.log(f"Candidates: {pack['_meta']['candidate_count']}")
         coverage = pack.get("_meta", {}).get("coverage", {})
         if isinstance(coverage, dict):
@@ -1733,6 +2005,63 @@ class MemorySync:
             raise ValueError("decisions JSON must be a list or an object with a decisions list")
         return [item for item in decisions if isinstance(item, dict)]
 
+    def validate_review_decision(self, pack_item: dict[str, Any], decision: dict[str, Any]) -> list[str]:
+        if decision.get("keep") is False:
+            return []
+        base = pack_item.get("base_memory") if isinstance(pack_item.get("base_memory"), dict) else {}
+        evidence = "\n".join(
+            [
+                str(pack_item.get("text", "")),
+                str(base.get("excerpt", "")),
+                str(base.get("evidence_text", "")),
+                str(base.get("summary", "")),
+                str(base.get("source_file", "")),
+                str(base.get("original_source_file", "")),
+            ]
+        )
+        claim = "\n".join(
+            [
+                str(decision.get("title", "")),
+                str(decision.get("summary", "")),
+                " ".join(str(item) for item in bounded_list(decision.get("keywords"), 18)),
+                " ".join(str(item) for item in bounded_list(decision.get("strong_keywords"), 10)),
+            ]
+        )
+        evidence_norm = normalize_keyword(evidence)
+        issues: list[str] = []
+        for token in sorted(important_grounding_tokens(claim)):
+            if token and token not in evidence_norm:
+                issues.append(f"unsupported token: {token}")
+        for marker in sorted(critical_claim_markers(claim)):
+            if not critical_marker_supported(marker, evidence):
+                issues.append(f"unsupported critical claim marker: {marker}")
+        lesson_type = str(decision.get("lesson_type", "")).strip()
+        if lesson_type == "failure_lesson" and not ({"失败", "失败原因", "教训", "failed", "failure"} & critical_claim_markers(evidence)):
+            lowered = evidence.lower()
+            if not any(
+                item in lowered
+                for item in (
+                    "失败",
+                    "故障",
+                    "错误",
+                    "异常",
+                    "超时",
+                    "投递失败",
+                    "403",
+                    "failed",
+                    "failure",
+                    "error",
+                    "timeout",
+                    "fetch failed",
+                    "econnaborted",
+                    "contexttoken",
+                )
+            ):
+                issues.append("failure_lesson without failure evidence")
+        if evidence_has_conflicting_polarity(evidence, claim):
+            issues.append("claim polarity conflicts with evidence")
+        return issues
+
     def apply_review_decision(self, base: dict[str, Any], decision: dict[str, Any]) -> dict[str, Any]:
         candidate = json.loads(json.dumps(base, ensure_ascii=False))
         if str(decision.get("stage", candidate.get("stage", "S1"))) in STAGES:
@@ -1758,6 +2087,11 @@ class MemorySync:
             if STAGES.index(candidate.get("stage", "S1")) < STAGES.index("S2"):
                 candidate["stage"] = "S2"
                 candidate["expire_at"] = self.store.expire_at("S2")
+        if candidate.get("stage") in {"S2", "S3", "S4"} and not candidate.get("evidence_text"):
+            candidate["evidence_text"] = extract_excerpt(
+                str(candidate.get("excerpt") or candidate.get("summary") or ""),
+                limit=evidence_limit_for_stage(str(candidate.get("stage"))),
+            )
         candidate["review_mode"] = "agent"
         candidate["reviewed_at"] = now_iso()
         candidate["review_reason"] = str(decision.get("reason", "")).strip()
@@ -1788,10 +2122,50 @@ class MemorySync:
             if len(missing) > 20:
                 self.log(f"- ... {len(missing) - 20} more")
             return 1
+        validation_errors: list[str] = []
+        for decision in decisions:
+            candidate_id = str(decision.get("candidate_id", "")).strip()
+            pack_item = by_id.get(candidate_id)
+            if not pack_item:
+                continue
+            for issue in self.validate_review_decision(pack_item, decision):
+                validation_errors.append(f"{candidate_id}: {issue}")
+        if validation_errors:
+            self.log("ERROR review decisions are not grounded in candidate evidence.")
+            for issue in validation_errors[:30]:
+                self.log(f"- {issue}")
+            if len(validation_errors) > 30:
+                self.log(f"- ... {len(validation_errors) - 30} more")
+            return 1
+
+        decision_by_id = {str(item.get("candidate_id", "")).strip(): item for item in decisions}
+        ordered_decisions: list[dict[str, Any]] = []
+        visiting: set[str] = set()
+        visited: set[str] = set()
+
+        def visit(candidate_id: str) -> None:
+            if candidate_id in visited:
+                return
+            if candidate_id in visiting:
+                return
+            visiting.add(candidate_id)
+            decision = decision_by_id.get(candidate_id)
+            if decision:
+                merge_with = str(decision.get("merge_with") or "").strip()
+                if merge_with in decision_by_id:
+                    visit(merge_with)
+                ordered_decisions.append(decision)
+            visiting.discard(candidate_id)
+            visited.add(candidate_id)
+
+        for decision in decisions:
+            visit(str(decision.get("candidate_id", "")).strip())
+
         stats: Counter[str] = Counter()
         reviewed = self.store.data[INDEX_META].setdefault("reviewed_candidates", {})
         reviewed_at = now_iso()
-        for decision in decisions:
+        candidate_to_memory: dict[str, str] = {}
+        for decision in ordered_decisions:
             candidate_id = str(decision.get("candidate_id", "")).strip()
             pack_item = by_id.get(candidate_id)
             if not pack_item:
@@ -1818,13 +2192,22 @@ class MemorySync:
             raw_merge_with = decision.get("merge_with")
             merge_with = str(raw_merge_with).strip() if raw_merge_with is not None else ""
             if merge_with:
-                existing = self.store.memories().get(merge_with)
+                target_memory_id = candidate_to_memory.get(merge_with, merge_with)
+                existing = self.store.memories().get(target_memory_id)
                 if existing:
-                    self.merge_memory(merge_with, existing, candidate, 1.0)
+                    self.merge_memory(
+                        target_memory_id,
+                        existing,
+                        candidate,
+                        1.0,
+                        replace=bool(decision.get("replace_summary")),
+                    )
+                    candidate_to_memory[candidate_id] = target_memory_id
                     stats["merged"] += 1
                     continue
                 self.log(f"WARN merge_with not found, using normal duplicate check: {merge_with}")
             _memory_id, action = self.add_or_merge(candidate)
+            candidate_to_memory[candidate_id] = _memory_id
             stats[action] += 1
 
         processed = self.store.data[INDEX_META].setdefault("processed_files", {})
@@ -1853,6 +2236,7 @@ class MemorySync:
         copied = [self.vault_path / rel for rel in pack.get("copied_daily_files", []) if isinstance(rel, str)]
         cleaned = self.clean_unrelated_daily_files(copied)
         self.persist_index_outputs(save_index=True)
+        self.clear_review_pack()
 
         self.log(
             "Review apply complete: "
@@ -1917,6 +2301,7 @@ class MemorySync:
         memory["quality_score"] = max(float(memory.get("quality_score", 0.0) or 0.0), 0.82)
         memory["memory_lane"] = "process"
         memory["source_confidence"] = memory.get("source_confidence") or "process_marker"
+        memory["evidence_text"] = extract_excerpt(body, limit=evidence_limit_for_stage("S2"))
 
     def build_distilled_memory(
         self,
@@ -1937,6 +2322,8 @@ class MemorySync:
         memory["source_type"] = "openclaw_distilled"
         memory["quality_score"] = float(metadata.get("quality_score", 1.0))
         memory.update(metadata)
+        if stage in {"S2", "S3", "S4"}:
+            memory["evidence_text"] = extract_excerpt(body, limit=evidence_limit_for_stage(stage))
         memory["sources"][0]["candidate_origin"] = origin
         return memory
 
@@ -1996,7 +2383,14 @@ class MemorySync:
                 best = (memory_id, memory, score)
         return best
 
-    def merge_memory(self, memory_id: str, existing: dict[str, Any], candidate: dict[str, Any], score: float) -> None:
+    def merge_memory(
+        self,
+        memory_id: str,
+        existing: dict[str, Any],
+        candidate: dict[str, Any],
+        score: float,
+        replace: bool = False,
+    ) -> None:
         source = {
             "file": candidate["source_file"],
             "anchor": candidate["source_anchor"],
@@ -2012,11 +2406,20 @@ class MemorySync:
         existing["strong_keywords"] = list(
             dict.fromkeys(existing.get("strong_keywords", []) + candidate.get("strong_keywords", []))
         )[:10]
-        existing["summary"] = candidate["summary"]
-        existing["excerpt"] = candidate["excerpt"]
-        existing["source_file"] = candidate["source_file"]
-        existing["source_anchor"] = candidate["source_anchor"]
-        existing["original_source_file"] = candidate.get("original_source_file")
+        existing.setdefault("alternate_summaries", [])
+        if candidate.get("summary") and candidate.get("summary") != existing.get("summary"):
+            existing["alternate_summaries"] = list(
+                dict.fromkeys(existing.get("alternate_summaries", []) + [candidate.get("summary")])
+            )[:8]
+        should_replace = replace or not existing.get("summary") or (
+            STAGES.index(candidate.get("stage", "S1")) > STAGES.index(existing.get("stage", "S1"))
+        )
+        if should_replace:
+            existing["summary"] = candidate["summary"]
+            existing["excerpt"] = candidate["excerpt"]
+            existing["source_file"] = candidate["source_file"]
+            existing["source_anchor"] = candidate["source_anchor"]
+            existing["original_source_file"] = candidate.get("original_source_file")
         for field in (
             "candidate_origin",
             "candidate_uid",
@@ -2037,9 +2440,9 @@ class MemorySync:
                 "lesson_type",
                 "process_markers",
                 "memory_lane",
-                "source_confidence",
+            "source_confidence",
             ):
-            if field in candidate:
+            if field in candidate and (should_replace or field not in existing):
                 existing[field] = candidate[field]
         if candidate.get("stage") == "S4" or STAGES.index(candidate.get("stage", "S1")) > STAGES.index(existing.get("stage", "S1")):
             existing["stage"] = candidate.get("stage", existing.get("stage", "S1"))
@@ -2302,15 +2705,88 @@ class MemorySync:
             return any(marker in lowered for marker in operational_markers)
         return has_topic and has_resolution
 
+    def session_evidence_context(self, evidence: str, radius: int = 4, limit: int = 6000) -> str:
+        match = re.match(r"(memory/\.dreams/session-corpus/\d{4}-\d{2}-\d{2}\.txt):(\d+)(?:-(\d+))?", evidence)
+        if not match:
+            return ""
+        rel = match.group(1)
+        start = int(match.group(2))
+        end = int(match.group(3) or start)
+        path = self.openclaw_path / rel
+        if not path.exists() or not path.is_file():
+            return ""
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        if not lines:
+            return ""
+        window_start = max(1, start - radius)
+        window_end = min(len(lines), end + radius)
+        snippet = "\n".join(lines[window_start - 1 : window_end]).strip()
+        expanded = self.expand_session_jsonl_references(snippet, limit=limit)
+        return extract_excerpt(expanded or snippet, limit=limit)
+
+    def json_text_fragments(self, value: Any) -> list[str]:
+        fragments: list[str] = []
+        if isinstance(value, str):
+            text = value.strip()
+            if text:
+                fragments.append(text)
+        elif isinstance(value, list):
+            for item in value:
+                fragments.extend(self.json_text_fragments(item))
+        elif isinstance(value, dict):
+            preferred = ["role", "speaker", "content", "text", "message", "output"]
+            for key in preferred:
+                if key in value:
+                    fragments.extend(self.json_text_fragments(value[key]))
+        return fragments
+
+    def read_jsonl_reference(self, rel: str, line_no: int) -> str:
+        candidates = [
+            self.openclaw_path / rel,
+            self.openclaw_path.parent / rel,
+            Path.home() / ".openclaw" / rel,
+        ]
+        path = next((item for item in candidates if item.exists() and item.is_file()), None)
+        if not path:
+            return ""
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        if line_no < 1 or line_no > len(lines):
+            return ""
+        raw = lines[line_no - 1]
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            return raw
+        fragments = self.json_text_fragments(payload)
+        return " ".join(dict.fromkeys(fragments))
+
+    def expand_session_jsonl_references(self, text: str, limit: int = 6000) -> str:
+        pieces: list[str] = []
+        pattern = re.compile(r"\[(main/sessions/[^\]#]+\.jsonl)#L(\d+)\]")
+        seen: set[tuple[str, int]] = set()
+        for match in pattern.finditer(text):
+            rel = match.group(1)
+            line_no = int(match.group(2))
+            key = (rel, line_no)
+            if key in seen:
+                continue
+            seen.add(key)
+            expanded = self.read_jsonl_reference(rel, line_no)
+            if expanded:
+                pieces.append(f"[{rel}#L{line_no}] {expanded}")
+        if not pieces:
+            return text
+        return extract_excerpt("\n".join(pieces), limit=limit)
+
     def write_curated_session_evidence(self, day: str, uid: str, body: str, evidence: str) -> tuple[str, str]:
-        path = self.agent_dir("openclaw") / "daily" / f"{day}.md"
+        path = self.agent_dir("openclaw") / "evidence" / f"{day}.md"
         path.parent.mkdir(parents=True, exist_ok=True)
         marker = f"<!-- memory-sync-session-candidate:{uid} -->"
         title = first_title(body)
         if path.exists():
             text = path.read_text(encoding="utf-8", errors="replace")
         else:
-            text = f"# OpenClaw curated session evidence {day}\n\n"
+            text = f"# OpenClaw evidence {day}\n\n"
         lines = text.splitlines()
         if marker not in text:
             if text and not text.endswith("\n"):
@@ -2326,8 +2802,9 @@ class MemorySync:
             self.write_text_atomic(path, text.rstrip() + "\n")
             lines = (text.rstrip() + "\n").splitlines()
         start = next((index + 1 for index, line in enumerate(lines) if marker in line), len(lines))
-        end = min(len(lines), start + max(1, len(body.splitlines())) + 2)
-        return self.vault_rel(path), f"line {start}-{end}"
+        body_start = min(len(lines), start + 3)
+        body_end = min(len(lines), body_start + max(1, len(body.splitlines())) - 1)
+        return self.vault_rel(path), f"line {body_start}-{body_end}"
 
     def collect_session_corpus_candidates(self) -> list[dict[str, Any]]:
         dream_dir = self.openclaw_path / "memory" / "dreaming" / "light"
@@ -2346,7 +2823,8 @@ class MemorySync:
                 day_match = re.search(r"session-corpus/(\d{4}-\d{2}-\d{2})\.txt", evidence)
                 day = day_match.group(1) if day_match else path.stem[:10]
                 uid = candidate_uid("openclaw-session-curated", evidence, body)
-                source_file, anchor = self.write_curated_session_evidence(day, uid, body, evidence)
+                full_body = self.session_evidence_context(evidence) or body
+                source_file, anchor = self.write_curated_session_evidence(day, uid, full_body, evidence)
                 metadata = {
                     "candidate_origin": "openclaw-session-curated",
                     "candidate_uid": uid,
@@ -2356,10 +2834,11 @@ class MemorySync:
                     "quality_score": max(0.7, min(1.0, confidence or 0.72)),
                     "source_agent": "openclaw",
                     "source_confidence": "curated_session_evidence",
+                    "curated_candidate_text": body,
                 }
                 memory = self.build_distilled_memory(
                     first_title(body),
-                    body,
+                    full_body,
                     source_file,
                     anchor,
                     evidence,
@@ -2540,31 +3019,54 @@ class MemorySync:
 
     def cmd_search(self, query: str) -> int:
         query_lower = query.lower()
-        terms = [normalize_keyword(term) for term in re.split(r"\s+", query_lower) if not is_generic_keyword(term)]
+        terms = search_terms_for_query(query)
         if not terms:
             terms = [query_lower]
-        results: list[tuple[int, str, dict[str, Any]]] = []
+        results: list[tuple[float, str, dict[str, Any]]] = []
         for memory_id, memory in self.store.memories().items():
             haystack = " ".join(
                 [
                     str(memory.get("title", "")),
                     str(memory.get("summary", "")),
                     str(memory.get("excerpt", "")),
+                    str(memory.get("evidence_text", "")),
+                    str(memory.get("source_file", "")),
+                    str(memory.get("original_source_file", "")),
                     " ".join(memory.get("keywords", [])),
                     " ".join(memory.get("strong_keywords", [])),
                 ]
             ).lower()
-            score = sum(5 for kw in memory.get("strong_keywords", []) if query_lower in str(kw).lower())
-            score += sum(2 for kw in memory.get("keywords", []) if query_lower in str(kw).lower())
-            score += sum(1 for term in terms if term and term in haystack)
+            score = 0.0
+            for kw in memory.get("strong_keywords", []):
+                normalized = normalize_keyword(str(kw))
+                if normalized and (normalized in query_lower or query_lower in normalized):
+                    score += 8
+            for kw in memory.get("keywords", []):
+                normalized = normalize_keyword(str(kw))
+                if normalized and (normalized in query_lower or query_lower in normalized):
+                    score += 4
+            matched_terms = [term for term in terms if len(term) >= 2 and term in haystack]
+            score += sum(1.5 if re.search(r"[\u4e00-\u9fff]", term) and len(term) >= 3 else 1 for term in matched_terms)
+            if len(matched_terms) >= 2:
+                score += min(4, len(matched_terms))
             if score:
                 results.append((score, memory_id, memory))
         results.sort(key=lambda item: item[0], reverse=True)
 
         self.log(f"Search results: {len(results)}")
         for score, memory_id, memory in results[:10]:
-            self.log(f"- {memory_id} [{memory.get('stage')}] score={score} {memory.get('title')}")
+            self.log(f"- {memory_id} [{memory.get('stage')}] score={score:.1f} {memory.get('title')}")
             self.log(f"  {memory.get('summary', '')}")
+            source = str(memory.get("source_file") or "")
+            anchor = str(memory.get("source_anchor") or "")
+            original = str(memory.get("original_source_file") or "")
+            if source:
+                self.log(f"  source: {source} {anchor}".rstrip())
+            if original and original != source:
+                self.log(f"  original: {original}")
+            evidence = str(memory.get("evidence_text") or memory.get("excerpt") or "")
+            if evidence:
+                self.log(f"  evidence: {compact_text(evidence, 240)}")
         return 0
 
     def trigger_words_in(self, text: str) -> list[str]:
@@ -2865,7 +3367,7 @@ class MemorySync:
             lines.append(f"- Permanent: [[{memory['permanent_file']}]]")
         if keywords:
             lines.extend(["", "## Keywords", "", ", ".join(str(item) for item in keywords[:12])])
-        excerpt = str(memory.get("excerpt", "")).strip()
+        excerpt = str(memory.get("evidence_text") or memory.get("excerpt", "")).strip()
         if excerpt:
             lines.extend(["", "## Evidence", "", excerpt])
         return "\n".join(lines).rstrip() + "\n"
@@ -2986,7 +3488,7 @@ class MemorySync:
     def write_agent_local_stores(self) -> None:
         for agent in ADAPTER_NAMES:
             base = self.agent_dir(agent)
-            for name in ("daily", "summaries", "permanent"):
+            for name in ("daily", "evidence", "conversations", "summaries", "permanent"):
                 (base / name).mkdir(parents=True, exist_ok=True)
 
             memories = self.agent_memories(agent)
@@ -3045,11 +3547,14 @@ class MemorySync:
             ("opencode", "user", home / ".config" / "opencode" / "skills"),
             ("opencode", "windows-user", home / "AppData" / "Roaming" / "opencode" / "skills"),
             ("hermes-agent", "user", home / ".hermes-agent" / "skills"),
+            ("qoder", "user", home / ".qoder" / "skills"),
+            ("qoder", "extensions", home / ".qoder" / "extensions"),
             ("shared", "agents", home / ".agents" / "skills"),
         ]
         appdata = os.environ.get("APPDATA")
         if appdata:
             roots.append(("openclaw", "official-npm", Path(appdata) / "npm" / "node_modules" / "openclaw" / "skills"))
+            roots.append(("qoder", "appdata", Path(appdata) / "Qoder" / "User" / "globalStorage"))
         extra = os.environ.get("MEMORY_SYNC_SKILL_DIRS", "")
         for index, raw in enumerate([item for item in extra.split(os.pathsep) if item.strip()], start=1):
             roots.append(("custom", f"extra-{index}", expand_path(raw)))
@@ -3462,6 +3967,14 @@ class MemorySync:
             self.log(f"  {stage}: {counts.get(stage, 0)}")
         processed = self.store.data.get(INDEX_META, {}).get("processed_files", {})
         self.log(f"Processed daily files: {len(processed)}")
+        pack_path = self.review_pack_path()
+        if pack_path.exists():
+            try:
+                pack = json.loads(pack_path.read_text(encoding="utf-8"))
+                count = int(pack.get("_meta", {}).get("candidate_count", 0))
+                self.log(f"Pending review pack: {self.vault_rel(pack_path)} candidates={count}")
+            except (json.JSONDecodeError, ValueError, TypeError):
+                self.log(f"Pending review pack: {self.vault_rel(pack_path)} (invalid JSON)")
 
         now = datetime.now()
         expiring: list[tuple[datetime, str, dict[str, Any]]] = []
@@ -3510,6 +4023,7 @@ class MemorySync:
             {"agent": "opencode", "label": "user", "path": home / ".config" / "opencode" / "AGENTS.md", "weight": 0.75},
             {"agent": "opencode", "label": "windows-user", "path": home / "AppData" / "Roaming" / "opencode" / "AGENTS.md", "weight": 0.75},
             {"agent": "hermes-agent", "label": "user", "path": home / ".hermes-agent" / "AGENTS.md", "weight": 0.65},
+            {"agent": "qoder", "label": "user", "path": home / ".qoder" / "AGENTS.md", "weight": 0.55},
         ]
 
         for raw in [item for item in os.environ.get("MEMORY_SYNC_PROJECT_ROOTS", "").split(os.pathsep) if item.strip()]:
@@ -3519,6 +4033,7 @@ class MemorySync:
                 ("codex", "AGENTS.md", 0.7),
                 ("openclaw", "AGENTS.md", 0.7),
                 ("opencode", "AGENTS.md", 0.7),
+                ("qoder", "AGENTS.md", 0.55),
                 ("claude", "CLAUDE.md", 0.7),
                 ("claude", ".claude/CLAUDE.md", 0.7),
             ]:
@@ -3573,7 +4088,7 @@ class MemorySync:
             ("active_projects", "memory-sync", ["memory-sync", "openclaw memory", "agent context", "user_profile", "agent_context"], "Memory-sync is the current context portability project."),
             ("active_projects", "autotestplatform", ["autotestplatform", "自动化测试平台"], "AutoTestPlatform is a recurring implementation project."),
             ("tool_preferences", "powershell_python_js", ["powershell", "python", "javascript", "pytest"], "Comfortable with PowerShell, Python, JavaScript, and pytest workflows."),
-            ("tool_preferences", "multi_agent_context", ["codex", "claude", "openclaw", "opencode", "hermes"], "Needs low-cost switching across multiple agents."),
+            ("tool_preferences", "multi_agent_context", ["codex", "claude", "openclaw", "opencode", "hermes", "qoder"], "Needs low-cost switching across multiple agents."),
             ("prompt_preferences", "action_oriented", ["多做事", "主动", "proactive", "解决", "执行"], "Prefer action-oriented agents that inspect, implement, and verify."),
             ("do_not_assume", "avoid_unverified_summaries", ["总结不准", "证据", "evidence", "不要擅自"], "Keep profile claims tied to evidence and avoid unsupported summaries."),
         ]
@@ -3735,6 +4250,16 @@ class MemorySync:
         self.save_user_profile(profile)
         return profile
 
+    def read_user_profile(self) -> dict[str, Any] | None:
+        path = self.profile_path()
+        if not path.exists():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return None
+        return payload if isinstance(payload, dict) else None
+
     def cmd_profile_build(self) -> int:
         profile = self.build_user_profile()
         self.save_user_profile(profile)
@@ -3747,7 +4272,11 @@ class MemorySync:
         return 0
 
     def cmd_profile_show(self) -> int:
-        profile = self.load_or_build_profile()
+        profile = self.read_user_profile()
+        if profile is None:
+            self.log(f"Profile not found or invalid: {self.vault_rel(self.profile_path())}")
+            self.log("Run `python scripts/main.py profile build` to generate it.")
+            return 1
         self.log(profile.get("profile_brief", ""))
         for category in ["communication_style", "decision_style", "workflows", "active_projects", "tool_preferences"]:
             items = profile.get("summary", {}).get(category, [])[:5]
@@ -3859,6 +4388,7 @@ class MemorySync:
             "openclaw": "OpenClaw Context",
             "opencode": "OpenCode Context",
             "hermes-agent": "Hermes Agent Handoff",
+            "qoder": "Qoder Context",
             "brief": "Agent Brief",
         }.get(adapter, adapter)
         lines = [f"# {title}", "", f"Generated: {context['_meta']['generated_at']}", "", "## User Brief", "", context.get("profile_brief", ""), ""]
@@ -3913,6 +4443,8 @@ class MemorySync:
             ])
         elif adapter == "opencode":
             lines.extend(["## OpenCode Operating Notes", "", "- Optimize for direct implementation context and minimal prose.", "- Use paths and commands from the context package.", ""])
+        elif adapter == "qoder":
+            lines.extend(["## Qoder Operating Notes", "", "- Use this as a portable context handoff until Qoder local chat schema is verified.", "- Prefer explicit handoff summaries and evidence-backed source links.", ""])
 
         for key, heading in [
             ("communication_style", "Communication"),
@@ -4076,6 +4608,519 @@ class MemorySync:
         lines.extend(["", "git_status:", git_status or "clean"])
         return "\n".join(lines).rstrip() + "\n"
 
+    def codex_home(self) -> Path:
+        return expand_path(str(CONFIG["CODEX_HOME"]))
+
+    def claude_home(self) -> Path:
+        return expand_path(str(CONFIG["CLAUDE_HOME"]))
+
+    def hermes_home(self) -> Path:
+        return expand_path(str(CONFIG["HERMES_HOME"]))
+
+    def qoder_home(self) -> Path:
+        return expand_path(str(CONFIG["QODER_HOME"]))
+
+    def codex_rollout_files(self) -> list[Path]:
+        sessions = self.codex_home() / "sessions"
+        if not sessions.exists():
+            return []
+        return sorted(sessions.rglob("rollout-*.jsonl"))
+
+    def claude_project_files(self) -> list[Path]:
+        projects = self.claude_home() / "projects"
+        if not projects.exists():
+            return []
+        return sorted(projects.rglob("*.jsonl"))
+
+    def codex_text_from_content(self, content: Any) -> str:
+        if isinstance(content, str):
+            return content.strip()
+        if not isinstance(content, list):
+            return ""
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, dict):
+                text = item.get("text") or item.get("input_text") or item.get("output_text")
+                if isinstance(text, str) and text.strip():
+                    parts.append(text.strip())
+        return "\n\n".join(parts).strip()
+
+    def codex_tool_arguments(self, raw: Any) -> dict[str, Any]:
+        if isinstance(raw, dict):
+            return raw
+        if not isinstance(raw, str) or not raw.strip():
+            return {}
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return {"raw": raw}
+        return parsed if isinstance(parsed, dict) else {"raw": parsed}
+
+    def codex_tool_summary(self, name: str, arguments: dict[str, Any]) -> str:
+        if name == "exec_command":
+            cmd = compact_text(str(arguments.get("cmd", "")), 120)
+            return f"exec_command: {cmd}" if cmd else "exec_command"
+        if name == "apply_patch":
+            return "apply_patch"
+        return name
+
+    def claude_text_from_content(self, content: Any) -> str:
+        if isinstance(content, str):
+            return content.strip()
+        parts: list[str] = []
+        if isinstance(content, list):
+            for item in content:
+                if isinstance(item, str) and item.strip():
+                    parts.append(item.strip())
+                elif isinstance(item, dict):
+                    item_type = item.get("type")
+                    if item_type == "text" and isinstance(item.get("text"), str):
+                        parts.append(item["text"].strip())
+                    elif item_type == "tool_result" and isinstance(item.get("content"), str):
+                        parts.append(item["content"].strip())
+        return "\n\n".join(part for part in parts if part).strip()
+
+    def claude_tool_events(self, content: Any, base_event: dict[str, Any]) -> list[dict[str, Any]]:
+        if not isinstance(content, list):
+            return []
+        events: list[dict[str, Any]] = []
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            item_type = item.get("type")
+            if item_type == "tool_use":
+                name = str(item.get("name") or "tool")
+                arguments = item.get("input") if isinstance(item.get("input"), dict) else {}
+                event = dict(base_event)
+                event.update(
+                    {
+                        "kind": "tool_call",
+                        "name": name,
+                        "call_id": item.get("id"),
+                        "summary": f"claude tool: {name}",
+                        "arguments": arguments,
+                    }
+                )
+                events.append(event)
+            elif item_type == "tool_result":
+                content_text = str(item.get("content") or "")
+                if not content_text.strip():
+                    continue
+                event = dict(base_event)
+                event.update(
+                    {
+                        "kind": "tool_output",
+                        "call_id": item.get("tool_use_id"),
+                        "output": content_text,
+                    }
+                )
+                events.append(event)
+        return events
+
+    def read_codex_rollout(self, path: Path, target_date: str | None, all_dates: bool) -> dict[tuple[str, str], dict[str, Any]]:
+        session_id = path.stem.replace("rollout-", "")
+        meta: dict[str, Any] = {"source_file": path.as_posix()}
+        groups: dict[tuple[str, str], dict[str, Any]] = {}
+
+        def ensure_group(day: str) -> dict[str, Any]:
+            key = (day, session_id)
+            if key not in groups:
+                groups[key] = {"date": day, "session_id": session_id, "meta": dict(meta), "events": []}
+            groups[key]["meta"].update({k: v for k, v in meta.items() if v})
+            return groups[key]
+
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            for line_no, line in enumerate(handle, start=1):
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                timestamp = parse_jsonl_time(str(obj.get("timestamp", "")))
+                day = timestamp.date().isoformat() if timestamp else ""
+                payload = obj.get("payload")
+                if obj.get("type") == "session_meta" and isinstance(payload, dict):
+                    session_id = str(payload.get("id") or session_id)
+                    meta.update(
+                        {
+                            "session_id": session_id,
+                            "created_at": payload.get("timestamp"),
+                            "cwd": payload.get("cwd"),
+                            "originator": payload.get("originator"),
+                            "cli_version": payload.get("cli_version"),
+                            "source": payload.get("source"),
+                            "model": payload.get("model"),
+                            "model_provider": payload.get("model_provider"),
+                            "source_file": path.as_posix(),
+                        }
+                    )
+                    continue
+                if not isinstance(payload, dict) or not timestamp:
+                    continue
+                if not all_dates and day != target_date:
+                    continue
+                if all_dates and not day:
+                    continue
+
+                group = ensure_group(day)
+                event = {
+                    "time": timestamp.replace(microsecond=0).isoformat(),
+                    "line": line_no,
+                    "source_file": path.as_posix(),
+                }
+
+                if obj.get("type") != "response_item":
+                    continue
+                item_type = payload.get("type")
+                if item_type == "message":
+                    role = str(payload.get("role") or "")
+                    if role not in {"user", "assistant"}:
+                        continue
+                    text = self.codex_text_from_content(payload.get("content"))
+                    if not text:
+                        continue
+                    event.update({"kind": "message", "role": role, "text": text})
+                    group["events"].append(event)
+                elif item_type == "function_call":
+                    name = str(payload.get("name") or "tool")
+                    arguments = self.codex_tool_arguments(payload.get("arguments"))
+                    event.update(
+                        {
+                            "kind": "tool_call",
+                            "name": name,
+                            "call_id": payload.get("call_id"),
+                            "summary": self.codex_tool_summary(name, arguments),
+                            "arguments": arguments,
+                        }
+                    )
+                    group["events"].append(event)
+                elif item_type == "function_call_output":
+                    output = str(payload.get("output") or "")
+                    if not output.strip():
+                        continue
+                    event.update(
+                        {
+                            "kind": "tool_output",
+                            "call_id": payload.get("call_id"),
+                            "output": output,
+                        }
+                    )
+                    group["events"].append(event)
+        return {key: value for key, value in groups.items() if value.get("events")}
+
+    def read_claude_project(self, path: Path, target_date: str | None, all_dates: bool) -> dict[tuple[str, str], dict[str, Any]]:
+        fallback_session = path.stem
+        meta: dict[str, Any] = {"source_file": path.as_posix(), "originator": "Claude Code"}
+        groups: dict[tuple[str, str], dict[str, Any]] = {}
+
+        def ensure_group(day: str, session_id: str) -> dict[str, Any]:
+            key = (day, session_id)
+            if key not in groups:
+                groups[key] = {"date": day, "session_id": session_id, "meta": dict(meta), "events": []}
+            groups[key]["meta"].update({k: v for k, v in meta.items() if v})
+            return groups[key]
+
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            for line_no, line in enumerate(handle, start=1):
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                timestamp = parse_jsonl_time(str(obj.get("timestamp", "")))
+                if not timestamp:
+                    continue
+                day = timestamp.date().isoformat()
+                if not all_dates and day != target_date:
+                    continue
+                session_id = str(obj.get("sessionId") or fallback_session)
+                msg = obj.get("message")
+                if not isinstance(msg, dict):
+                    continue
+                role = str(msg.get("role") or obj.get("type") or "")
+                if role not in {"user", "assistant"}:
+                    continue
+                meta.update(
+                    {
+                        "session_id": session_id,
+                        "cwd": obj.get("cwd"),
+                        "entrypoint": obj.get("entrypoint"),
+                        "cli_version": obj.get("version"),
+                        "source_file": path.as_posix(),
+                    }
+                )
+                group = ensure_group(day, session_id)
+                base_event = {
+                    "time": timestamp.replace(microsecond=0).isoformat(),
+                    "line": line_no,
+                    "source_file": path.as_posix(),
+                }
+                text = self.claude_text_from_content(msg.get("content"))
+                if text:
+                    event = dict(base_event)
+                    event.update({"kind": "message", "role": role, "text": text})
+                    group["events"].append(event)
+                group["events"].extend(self.claude_tool_events(msg.get("content"), base_event))
+        return {key: value for key, value in groups.items() if value.get("events")}
+
+    def read_openclaw_session_corpus(self, path: Path, target_date: str | None, all_dates: bool) -> dict[tuple[str, str], dict[str, Any]]:
+        day = path.stem
+        if not all_dates and day != target_date:
+            return {}
+        session_id = f"session-corpus-{day}"
+        conversation = {
+            "date": day,
+            "session_id": session_id,
+            "meta": {"source_file": path.as_posix(), "originator": "OpenClaw session-corpus", "cwd": str(self.openclaw_path)},
+            "events": [],
+        }
+        pattern = re.compile(r"^\[(?P<source>[^\]]+)\]\s+(?P<role>User|Assistant):\s*(?P<text>.*)")
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            for line_no, raw in enumerate(handle, start=1):
+                line = raw.strip()
+                if not line:
+                    continue
+                match = pattern.match(line)
+                if match:
+                    role = "user" if match.group("role") == "User" else "assistant"
+                    text = match.group("text").strip()
+                    source = match.group("source")
+                else:
+                    role = "assistant"
+                    text = line
+                    source = path.as_posix()
+                conversation["events"].append(
+                    {
+                        "kind": "message",
+                        "role": role,
+                        "text": text,
+                        "time": day,
+                        "line": line_no,
+                        "source_file": source,
+                    }
+                )
+        if not conversation["events"]:
+            return {}
+        return {(day, session_id): conversation}
+
+    def codex_conversation_markdown(self, conversation: dict[str, Any]) -> str:
+        return self.agent_conversation_markdown("codex", conversation)
+
+    def agent_conversation_markdown(self, agent: str, conversation: dict[str, Any]) -> str:
+        meta = conversation.get("meta", {})
+        events = conversation.get("events", [])
+        labels = {"codex": "Codex", "claude": "Claude", "openclaw": "OpenClaw", "opencode": "OpenCode", "hermes-agent": "hermes-agent", "qoder": "Qoder"}
+        label = labels.get(agent, agent)
+        title = f"{label} Conversation {conversation.get('date')} {str(conversation.get('session_id', ''))[:12]}"
+        lines = [
+            f"# {title}",
+            "",
+            f"- Agent: {agent}",
+            f"- Date: {conversation.get('date')}",
+            f"- Session: `{conversation.get('session_id')}`",
+            f"- Project: `{meta.get('cwd', '')}`",
+            f"- Source: `{meta.get('source_file', '')}`",
+            f"- Originator: {meta.get('originator') or ''}",
+            f"- Model: {meta.get('model') or ''}",
+            f"- CLI version: {meta.get('cli_version') or ''}",
+            f"- Event count: {len(events)}",
+            "",
+            "## Timeline",
+            "",
+        ]
+        for event in events:
+            time = str(event.get("time", ""))
+            line_no = event.get("line")
+            if event.get("kind") == "message":
+                role = "User" if event.get("role") == "user" else "Assistant"
+                lines.extend(
+                    [
+                        f"### {time} {role}",
+                        "",
+                        truncate_text(str(event.get("text", "")), 12000),
+                        "",
+                        f"_Source line: {line_no}_",
+                        "",
+                    ]
+                )
+            elif event.get("kind") == "tool_call":
+                summary = markdown_heading_text(event.get("summary"), "tool call")
+                arguments = event.get("arguments") if isinstance(event.get("arguments"), dict) else {}
+                lines.extend(
+                    [
+                        f"<details>",
+                        f"<summary>{time} Tool call: {summary}</summary>",
+                        "",
+                        "````json",
+                        truncate_text(json.dumps(arguments, ensure_ascii=False, indent=2), 4000),
+                        "````",
+                        "",
+                        f"_Source line: {line_no}_",
+                        "",
+                        "</details>",
+                        "",
+                    ]
+                )
+            elif event.get("kind") == "tool_output":
+                lines.extend(
+                    [
+                        f"<details>",
+                        f"<summary>{time} Tool output</summary>",
+                        "",
+                        "````text",
+                        truncate_text(str(event.get("output", "")), 4000),
+                        "````",
+                        "",
+                        f"_Source line: {line_no}_",
+                        "",
+                        "</details>",
+                        "",
+                    ]
+                )
+        return "\n".join(lines).rstrip() + "\n"
+
+    def write_conversation_archive(
+        self,
+        agent: str,
+        conversations: dict[tuple[str, str], dict[str, Any]],
+        source_count: int,
+    ) -> int:
+        base = self.agent_dir(agent) / "conversations"
+        written: list[dict[str, Any]] = []
+        for (day, session_id), conversation in sorted(conversations.items()):
+            day_dir = base / day
+            day_dir.mkdir(parents=True, exist_ok=True)
+            path = day_dir / f"{session_id}.md"
+            self.write_text_atomic(path, self.agent_conversation_markdown(agent, conversation))
+            rel = self.vault_rel(path)
+            record = {
+                "agent": agent,
+                "date": day,
+                "session_id": session_id,
+                "path": rel,
+                "source_file": conversation.get("meta", {}).get("source_file"),
+                "event_count": len(conversation.get("events", [])),
+                "generated_at": now_iso(),
+            }
+            written.append(record)
+            self.log(f"Conversation archived: {rel} events={record['event_count']}")
+
+        by_day: dict[str, list[dict[str, Any]]] = {}
+        for record in written:
+            by_day.setdefault(str(record["date"]), []).append(record)
+        for day, records in by_day.items():
+            self.write_json_atomic(
+                base / day / "index.json",
+                {
+                    "_meta": {
+                        "schema": "memory-sync-conversation-day-index",
+                        "agent": agent,
+                        "date": day,
+                        "generated_at": now_iso(),
+                    },
+                    "conversations": records,
+                },
+            )
+        all_records: list[dict[str, Any]] = []
+        for index_path in sorted(base.glob("*/index.json")):
+            try:
+                payload = json.loads(index_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                continue
+            records = payload.get("conversations", [])
+            if isinstance(records, list):
+                all_records.extend([item for item in records if isinstance(item, dict)])
+        self.write_json_atomic(
+            base / "index.json",
+            {
+                "_meta": {
+                    "schema": "memory-sync-conversation-index",
+                    "agent": agent,
+                    "generated_at": now_iso(),
+                    "record_count": len(all_records),
+                },
+                "conversations": all_records,
+            },
+        )
+        self.log(f"{agent} conversation scan complete: files={source_count}, conversations={len(written)}")
+        return 0
+
+    def cmd_conversations_scan_codex(self, target_date: str | None = None, all_dates: bool = False) -> int:
+        if not all_dates and not target_date:
+            target_date = datetime.now().date().isoformat()
+        files = self.codex_rollout_files()
+        if not files:
+            self.log(f"ERROR Codex rollout files not found under: {self.codex_home() / 'sessions'}")
+            return 1
+
+        conversations: dict[tuple[str, str], dict[str, Any]] = {}
+        for path in files:
+            for key, value in self.read_codex_rollout(path, target_date, all_dates).items():
+                conversations[key] = value
+        return self.write_conversation_archive("codex", conversations, len(files))
+
+    def cmd_conversations_scan_claude(self, target_date: str | None = None, all_dates: bool = False) -> int:
+        if not all_dates and not target_date:
+            target_date = datetime.now().date().isoformat()
+        files = self.claude_project_files()
+        if not files:
+            self.log(f"ERROR Claude conversation files not found under: {self.claude_home() / 'projects'}")
+            return 1
+        conversations: dict[tuple[str, str], dict[str, Any]] = {}
+        for path in files:
+            for key, value in self.read_claude_project(path, target_date, all_dates).items():
+                conversations[key] = value
+        return self.write_conversation_archive("claude", conversations, len(files))
+
+    def cmd_conversations_scan_openclaw(self, target_date: str | None = None, all_dates: bool = False) -> int:
+        if not all_dates and not target_date:
+            target_date = datetime.now().date().isoformat()
+        corpus_dir = self.openclaw_path / "memory" / ".dreams" / "session-corpus"
+        if not corpus_dir.exists():
+            self.log(f"ERROR OpenClaw session-corpus not found: {corpus_dir}")
+            return 1
+        files = sorted(corpus_dir.glob("*.txt"))
+        conversations: dict[tuple[str, str], dict[str, Any]] = {}
+        for path in files:
+            for key, value in self.read_openclaw_session_corpus(path, target_date, all_dates).items():
+                conversations[key] = value
+        return self.write_conversation_archive("openclaw", conversations, len(files))
+
+    def cmd_conversations_probe(self, agent: str) -> int:
+        if agent == "hermes-agent":
+            db = self.hermes_home() / "state.db"
+            self.log(f"Hermes conversation scan is not enabled by default. Expected state DB: {db}")
+            self.log("Use explicit handoff until a stable local schema is verified.")
+            return 0
+        if agent == "opencode":
+            self.log("OpenCode conversation scan is not implemented yet; use explicit handoff or configure a transcript path.")
+            return 0
+        qoder_paths = [
+            self.qoder_home(),
+            expand_path("~/.qoder"),
+            Path(os.environ.get("APPDATA", "")) / "Qoder" / "User" / "globalStorage" / "state.vscdb",
+        ]
+        self.log("Qoder conversation scan is not enabled by default because its local state.vscdb schema is not stable.")
+        for path in qoder_paths:
+            self.log(f"- probe: {path} exists={path.exists()}")
+        return 0
+
+    def cmd_conversations_scan(self, agent: str, target_date: str | None = None, all_dates: bool = False) -> int:
+        if agent == "all":
+            status = 0
+            for name in ("codex", "claude", "openclaw", "hermes-agent", "opencode", "qoder"):
+                result = self.cmd_conversations_scan(name, target_date=target_date, all_dates=all_dates)
+                status = status or result
+            return status
+        if agent == "codex":
+            return self.cmd_conversations_scan_codex(target_date=target_date, all_dates=all_dates)
+        if agent == "claude":
+            return self.cmd_conversations_scan_claude(target_date=target_date, all_dates=all_dates)
+        if agent == "openclaw":
+            return self.cmd_conversations_scan_openclaw(target_date=target_date, all_dates=all_dates)
+        if agent in {"hermes-agent", "opencode", "qoder"}:
+            return self.cmd_conversations_probe(agent)
+        self.log(f"ERROR conversation scan is not implemented for: {agent}")
+        return 1
+
     def cmd_ingest(self, agent: str, text: str) -> int:
         if agent not in ADAPTER_NAMES:
             self.log(f"ERROR unknown agent: {agent}")
@@ -4154,23 +5199,30 @@ class MemorySync:
         return 0
 
     def cmd_context_brief(self) -> int:
-        profile = self.load_or_build_profile()
+        profile = self.read_user_profile()
+        if profile is None:
+            self.log(f"Profile not found or invalid: {self.vault_rel(self.profile_path())}")
+            self.log("Run `python scripts/main.py profile build` or `python scripts/main.py context export all`.")
+            return 1
         context = self.build_agent_context(profile)
         text = self.adapter_markdown(context, "brief")
-        self.write_shared_layer(profile=profile, context=context)
-        if CONFIG["LEGACY_CONTEXT_ENABLED"]:
-            path = self.vault_path / CONTEXT_DIR / "agent_brief.md"
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(text, encoding="utf-8")
         self.log(text)
         return 0
 
     def cmd_context_doctor(self) -> int:
-        profile = self.load_or_build_profile()
+        profile = self.read_user_profile()
+        if profile is None:
+            profile = {
+                "_meta": {"generated_at": None},
+                "summary": {},
+                "profile_brief": "",
+            }
         context = self.build_agent_context(profile)
         issues = []
         if not self.profile_path().exists():
             issues.append("missing user_profile.json")
+        elif not self.read_user_profile():
+            issues.append("invalid user_profile.json")
         if CONFIG["LEGACY_CONTEXT_ENABLED"] and not (self.vault_path / CONTEXT_DIR).exists():
             issues.append("missing legacy _context directory")
         if not (self.vault_path / MEMORY_DASHBOARD_FILE).exists():
@@ -4200,14 +5252,7 @@ class MemorySync:
             if Path(item["path"]).exists() and Path(item["path"]).is_file()
         }
         for adapter in ADAPTER_NAMES:
-            skill_count = 0
-            skills_path = self.agent_dir(adapter) / "skills.json"
-            if skills_path.exists():
-                try:
-                    skill_count = int(json.loads(skills_path.read_text(encoding="utf-8")).get("_meta", {}).get("record_count", 0))
-                except (json.JSONDecodeError, ValueError, TypeError):
-                    skill_count = 0
-            if adapter not in existing_rule_agents and (self.agent_memories(adapter) or skill_count > 0):
+            if adapter not in existing_rule_agents and self.agent_memories(adapter):
                 issues.append(f"no persistent rule/profile source found for {adapter}; add one or configure MEMORY_SYNC_PROJECT_ROOTS/MEMORY_SYNC_AGENT_KNOWLEDGE_FILES")
         if len(profile.get("summary", {}).get("communication_style", [])) == 0:
             issues.append("communication_style has no signals")
@@ -4258,6 +5303,7 @@ def usage() -> None:
     print("  python scripts/main.py search <keyword>")
     print("  python scripts/main.py diagnose <text>")
     print("  python scripts/main.py ingest <agent> [--stdin|--file path|--project path|text]")
+    print("  python scripts/main.py conversations scan [codex|claude|openclaw|opencode|hermes-agent|qoder|all] [--date YYYY-MM-DD|--all]")
     print("  python scripts/main.py review prepare")
     print("  python scripts/main.py review apply <decisions.json> [pack.json]")
     print("  python scripts/main.py handoff <agent>")
@@ -4267,7 +5313,7 @@ def usage() -> None:
     print("  python scripts/main.py index clean")
     print("  python scripts/main.py profile build")
     print("  python scripts/main.py profile show")
-    print("  python scripts/main.py context export [all|codex|claude|openclaw|opencode|hermes-agent]")
+    print(f"  python scripts/main.py context export [{CONTEXT_ADAPTER_LIST}]")
     print("  python scripts/main.py context brief")
     print("  python scripts/main.py context doctor")
     print("  python scripts/main.py skills sync")
@@ -4319,6 +5365,37 @@ def main(argv: list[str] | None = None) -> int:
             print(f"ERROR {exc}")
             return 1
         return app.cmd_ingest(agent, text)
+    if command == "conversations":
+        if len(args) < 3 or args[1] != "scan":
+            print(f"ERROR conversations requires: scan <{CONTEXT_ADAPTER_LIST}> [--date YYYY-MM-DD|--all]")
+            return 1
+        agent = args[2]
+        if agent != "all" and agent not in ADAPTER_NAMES:
+            print(f"ERROR unknown agent: {agent}")
+            return 1
+        target_date: str | None = None
+        all_dates = False
+        index = 3
+        while index < len(args):
+            if args[index] == "--all":
+                all_dates = True
+                index += 1
+            elif args[index] == "--date":
+                if index + 1 >= len(args):
+                    print("ERROR --date requires YYYY-MM-DD")
+                    return 1
+                target_date = args[index + 1]
+                if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", target_date):
+                    print("ERROR --date must be YYYY-MM-DD")
+                    return 1
+                index += 2
+            else:
+                print(f"ERROR unknown conversations option: {args[index]}")
+                return 1
+        if all_dates and target_date:
+            print("ERROR use either --date or --all, not both")
+            return 1
+        return app.cmd_conversations_scan(agent, target_date=target_date, all_dates=all_dates)
     if command == "review":
         if len(args) < 2 or args[1] not in {"prepare", "apply"}:
             print("ERROR review requires: prepare or apply <decisions.json> [pack.json]")

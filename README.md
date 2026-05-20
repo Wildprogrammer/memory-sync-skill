@@ -7,7 +7,7 @@
 [![Obsidian](https://img.shields.io/badge/storage-Obsidian-purple)](#)
 [![License](https://img.shields.io/badge/license-MIT-lightgrey)](LICENSE)
 
-Memory Sync helps AI agents remember at the right time, understand the user better, and carry useful context across tools like OpenClaw, Codex, Claude, OpenCode, and hermes-agent.
+Memory Sync helps AI agents remember at the right time, understand the user better, and carry useful context across tools like OpenClaw, Codex, Claude, OpenCode, hermes-agent, and Qoder.
 
 It is built as a companion to OpenClaw, not a replacement. OpenClaw can continue doing slower recall, dreaming, and long-term promotion. Memory Sync adds the fast working layer: preserve useful context early, make it searchable in Obsidian, reinforce it when used, and forget it when it stops mattering. By default, the current agent reviews candidate memories itself; the script prepares evidence and safely applies structured decisions.
 
@@ -87,7 +87,7 @@ Memory Sync has four layers:
 | Source | Reads OpenClaw daily files, OpenClaw distilled candidates, agent handoffs, project captures, USER.md, and local agent configuration |
 | Obsidian | Provides the human-readable memory surface with Markdown pages, dashboards, source links, and reviewable profile output |
 | Index and Retention | Maintains the machine-readable memory index, S1-S4 stages, hit reinforcement, TTL expiry, and safe cleanup |
-| Shared Context | Publishes compact context packs under `_shared/context/` for Codex, Claude, OpenClaw, OpenCode, and hermes-agent |
+| Shared Context | Publishes compact context packs under `_shared/context/` for Codex, Claude, OpenClaw, OpenCode, hermes-agent, and Qoder |
 | Personal Knowledge | Preserves non-daily knowledge such as MEMORY.md, AGENTS.md, USER.md, and installed skill inventories under `Personal/Agent Knowledge/` |
 
 OpenClaw source files are treated as read-only. Memory Sync works on Obsidian copies and derived outputs.
@@ -137,6 +137,7 @@ High-value process memories, including successful procedures, corrections, failu
 | Claude | Long-context writing, reasoning, and handoff summaries |
 | OpenCode | Code-agent context portability |
 | hermes-agent | Agent-to-agent handoff context |
+| Qoder | Explicit handoff and shared context portability while local chat schemas remain experimental |
 
 ## Relationship To OpenClaw
 
@@ -162,6 +163,8 @@ Obsidian does not need to be running. The script writes Markdown and JSON files 
 - Added installed skill inventory sync under `_shared/agent_skills.json`, `_agents/<agent>/skills.json`, and `Personal/Agent Knowledge/Agent Skills.md`.
 - Added operating contracts for OpenClaw and hermes-agent context exports.
 - Added agent-assisted review mode: the current agent reviews candidate memories, while scripts prepare evidence and apply structured decisions.
+- Added readable conversation archives for supported local logs; archived conversations enter review before becoming memories.
+- Added stricter review grounding checks and read-only behavior for diagnostic context commands.
 
 ## 当前版本
 
@@ -170,6 +173,8 @@ Obsidian does not need to be running. The script writes Markdown and JSON files 
 - 新增已安装 skill 清单同步，输出到 `_shared/agent_skills.json`、`_agents/<agent>/skills.json` 和 `Personal/Agent Knowledge/Agent Skills.md`。
 - 为 OpenClaw 和 hermes-agent 上下文加入 Operating Contract，强化规则读取、冲突反馈和安全边界。
 - 新增 agent-assisted review 模式：当前 agent 负责审核候选记忆，脚本负责准备证据和结构化落库。
+- 新增本地对话归档能力；归档对话先进入 review，再决定是否晋升为记忆。
+- 新增更严格的证据校验，并让上下文诊断类命令保持只读。
 
 ## Documentation
 

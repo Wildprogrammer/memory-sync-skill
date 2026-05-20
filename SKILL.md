@@ -1,6 +1,6 @@
 ---
 name: memory-sync
-description: Synchronize OpenClaw memory and multi-agent handoffs into Obsidian as a fast retention and context portability layer. Copies OpenClaw daily files, imports recall/dreaming/MEMORY candidates, preserves non-daily agent knowledge into Personal/Agent Knowledge, syncs installed skill inventories, ingests Codex/Claude/OpenClaw/OpenCode/hermes-agent handoff summaries, keeps per-agent stores under _agents, builds shared assets under _shared, maintains JSON/Markdown indexes, builds user profile, exports context packs, applies S1-S4 TTL, supports trigger check/hit, safe Obsidian-only cleanup, and optional Git/GitHub sync. Use for memory sync, ingest codex, candidates, handoff openclaw, skills sync, search, profile build, context export, hermes-agent handoff, git sync, status, or autopilot.
+description: Synchronize OpenClaw memory, Codex/Claude/OpenClaw conversation archives, and multi-agent handoffs into Obsidian as a fast retention and context portability layer. Copies OpenClaw daily files, imports recall/dreaming/MEMORY candidates, archives local Codex/Claude/OpenClaw chats, preserves non-daily agent knowledge into Personal/Agent Knowledge, syncs installed skill inventories, ingests Codex/Claude/OpenClaw/OpenCode/hermes-agent/Qoder handoff summaries, keeps per-agent stores under _agents, builds shared assets under _shared, maintains JSON/Markdown indexes, builds user profile, exports context packs, applies S1-S4 TTL, supports trigger check/hit, safe Obsidian-only cleanup, and optional Git/GitHub sync. Use for memory sync, conversations scan, ingest codex, candidates, handoff openclaw, skills sync, search, profile build, context export, hermes-agent handoff, git sync, status, or autopilot.
 ---
 
 # Memory Sync
@@ -17,14 +17,15 @@ Use this skill as an OpenClaw companion and multi-agent handoff layer, not a rep
 - Import OpenClaw distilled signals from `.dreams/short-term-recall.json`, `.dreams/phase-signals.json`, `memory/dreaming/rem/`, `memory/dreaming/deep/`, and promoted `MEMORY.md` entries.
 - Preserve non-daily agent knowledge such as `MEMORY.md`, `USER.md`, `AGENTS.md`, and tool/config notes into `Personal/Agent Knowledge/<agent>/`.
 - Detect high-value process memories such as success patterns, corrections, failure lessons, and user rules; these enter as S2 `process_memory` records.
-- Ingest explicit handoff summaries from Codex, Claude, OpenClaw, OpenCode, and hermes-agent into their own `_agents/<agent>/daily/` lane before indexing.
+- Ingest explicit handoff summaries from Codex, Claude, OpenClaw, OpenCode, hermes-agent, and Qoder into their own `_agents/<agent>/daily/` lane before indexing.
+- Archive Codex Desktop, Claude Code, and OpenClaw session-corpus conversation history into `_agents/<agent>/conversations/YYYY-MM-DD/` by event timestamp where available, not file directory date.
 - Build `_index/user_profile.json` and `03-Reference/User画像.md` from USER.md, the memory index, and local agent configuration.
-- Export portable adapter context under `_shared/context/` for Codex, Claude, OpenClaw, OpenCode, and hermes-agent.
+- Export portable adapter context under `_shared/context/` for Codex, Claude, OpenClaw, OpenCode, hermes-agent, and Qoder.
 - Export installed skill inventory under `_shared/agent_skills.json`, `_agents/<agent>/skills.json`, and `Personal/Agent Knowledge/Agent Skills.md`.
 - Treat `_context/` as a legacy compatibility output only; it is disabled by default unless `LEGACY_CONTEXT_ENABLED=true`.
 - Keep per-agent local stores under `_agents/<agent>/` with separate `daily/`, `summaries/`, `index.json`, and `permanent/`.
 - Keep portable shared distilled assets under `_shared/`, including shared memory, profile, context JSON, and adapter Markdown.
-- Reject direct legacy/session sources such as `.dreams/session-corpus` and `main/sessions/*.jsonl`; when OpenClaw surfaces high-value session evidence, first curate a compact Obsidian evidence block under `_agents/openclaw/daily/YYYY-MM-DD.md`, then index that Obsidian block.
+- Reject direct legacy/session sources such as `.dreams/session-corpus` and `main/sessions/*.jsonl`; when OpenClaw surfaces high-value session evidence, first curate a stable Obsidian evidence block under `_agents/openclaw/evidence/YYYY-MM-DD.md`, then index that Obsidian block.
 - Remove only Obsidian daily copies, and only when no indexed memory references them.
 - Commit/push only through explicit `git sync` or `GIT_SYNC_ENABLED=true` autopilot.
 
@@ -40,6 +41,10 @@ python scripts/main.py ingest codex --project D:/memory-sync-skill --note "curre
 python scripts/main.py ingest codex --stdin
 python scripts/main.py ingest claude --file session.md
 python scripts/main.py ingest opencode "decision: ..."
+python scripts/main.py conversations scan codex --date 2026-05-20
+python scripts/main.py conversations scan claude --date 2026-05-13
+python scripts/main.py conversations scan openclaw --date 2026-05-19
+python scripts/main.py conversations scan all --date 2026-05-20
 python scripts/main.py candidates
 python scripts/main.py handoff openclaw
 python scripts/main.py search "keyword"
@@ -72,9 +77,11 @@ When the user asks to run memory sync in agent mode:
 4. Write a decisions JSON file with one decision per candidate.
 5. Run `python scripts/main.py review apply <decisions.json>`.
 6. Run `python scripts/main.py status` and, if requested or configured, `python scripts/main.py git sync`.
+
+`sync` and `autopilot` are not considered complete in agent review mode until the agent has applied decisions. If they only write `_review/memory-sync/latest-pack.json`, treat the run as pending review, not as a finished memory sync.
 ```
 
-The script handles deterministic work: copying OpenClaw daily files into Obsidian, splitting source material, filtering obvious junk, preserving source anchors, curating high-value OpenClaw session evidence into Obsidian evidence blocks, validating decisions, writing JSON/Markdown surfaces, and keeping OpenClaw source files read-only.
+The script handles deterministic work: copying OpenClaw daily files into Obsidian, splitting source material, filtering obvious junk, preserving source anchors, curating high-value OpenClaw session evidence into stable Obsidian evidence blocks, validating decisions, writing JSON/Markdown surfaces, and keeping OpenClaw source files read-only.
 
 The current agent handles judgment work: candidate selection, summary, keywords, S1-S4 rating, process-memory classification, and duplicate/merge suggestions. Treat `rule_suggestion` as a hint only. The agent decision is the source of truth in review mode.
 
@@ -103,7 +110,9 @@ Decision output must follow this shape:
 
 Every candidate in the pack must have a decision. Use `"keep": false` for discarded material. Do not invent facts outside the candidate text. Preserve `source_file` and `source_anchor` by letting the script apply decisions rather than editing the index manually.
 
-The pack `_meta.coverage` section reports scanned daily files, segment count, skipped count, high-value skipped count, and curated session evidence count. If `high_value_skipped` is non-zero, inspect `skipped` before applying decisions; the filter may need tuning for the user's style.
+`review apply` rejects decisions that make obvious unsupported claims, such as file paths, URLs, IDs, failure/success markers, or process-memory labels that are not grounded in the candidate evidence. If a candidate is similar to an existing memory, use `merge_with`; it can reference either an existing `memory_###` id or another candidate id from the same pack. By default merges preserve the older canonical summary and append sources; use `"replace_summary": true` only when the newer evidence is clearly better.
+
+The pack `_meta.coverage` section reports scanned daily files, segment count, skipped count, high-value skipped count, and curated session evidence count. If `high_value_skipped` is non-zero, inspect `skipped` before applying decisions; the filter may need tuning for the user's style. The script prints both the vault-relative pack path and the absolute filesystem path.
 
 Use `MEMORY_SYNC_REVIEW_MODE=rules` only when the user explicitly wants the deterministic fallback, wants to save agent tokens, or needs a headless/offline run.
 
@@ -157,7 +166,9 @@ openclaw_rem_hits
 openclaw_concept_tags
 ```
 
-Only import a distilled candidate directly when its evidence resolves to an existing `memory/YYYY-MM-DD.md` source that can be copied into Obsidian. Session-corpus evidence is never indexed as a raw source; high-value lines are first copied into `_agents/openclaw/daily/YYYY-MM-DD.md` with an `Original evidence` link, then reviewed like any other Obsidian-backed candidate.
+Only import a distilled candidate directly when its evidence resolves to an existing `memory/YYYY-MM-DD.md` source that can be copied into Obsidian. Session-corpus evidence is never indexed as a raw source; high-value lines are expanded with nearby context, copied into `_agents/openclaw/evidence/YYYY-MM-DD.md` with an `Original evidence` link, then reviewed like any other Obsidian-backed candidate. Do not store curated session evidence under `_agents/openclaw/daily/`, because that directory is rebuilt from daily copies.
+
+Search is keyword-based but query-aware: Chinese natural-language queries are expanded into useful n-grams and extracted keyword hints, so a query such as `小红书攻略提分` can still match memories tagged with `小红书` and `攻略`. Search results include summary, source, original evidence pointer, and an evidence preview.
 
 Filtering uses three layers:
 
@@ -175,9 +186,22 @@ python scripts/main.py ingest claude --file session.md
 python scripts/main.py ingest hermes-agent "decision: keep OpenClaw source read-only; next action: run sync"
 ```
 
-Supported agents are `codex`, `claude`, `openclaw`, `opencode`, and `hermes-agent`.
+Supported agents are `codex`, `claude`, `openclaw`, `opencode`, `hermes-agent`, and `qoder`.
 
-Ingest writes the submitted summary or captured project state to `_agents/<agent>/daily/YYYY-MM-DD.md` under `Summary` and `Original Context` sections. The index and portable context keep a compact summary plus `source_file`/`source_anchor` back to that original record. It creates an S1/S2 `agent_ingest` candidate when the content passes filters, merges duplicates into `_index/openclaw_memory_index.json`, then refreshes profile and `_shared` context outputs. It does not try to scrape hidden chat transcripts; the agent must submit a concise handoff summary or use `--project` to capture real project state.
+Ingest writes the submitted summary or captured project state to `_agents/<agent>/daily/YYYY-MM-DD.md` under `Summary` and `Original Context` sections. The index and portable context keep a compact summary plus `source_file`/`source_anchor` back to that original record. It creates an S1/S2 `agent_ingest` candidate when the content passes filters, merges duplicates into `_index/openclaw_memory_index.json`, then refreshes profile and `_shared` context outputs.
+
+For local chat history, prefer conversation archive over `ingest <agent> --project`:
+
+```bash
+python scripts/main.py conversations scan codex --date 2026-05-20
+python scripts/main.py conversations scan claude --date 2026-05-13
+python scripts/main.py conversations scan openclaw --date 2026-05-19
+python scripts/main.py conversations scan all --all
+```
+
+Codex Desktop may keep a long thread in the rollout file for the day the session was created, not the day a later message was sent. The scanner therefore scans all `CODEX_HOME/sessions/**/rollout-*.jsonl` files and groups records by each event's internal timestamp. Claude Code scans `CLAUDE_HOME/projects/**/*.jsonl`. OpenClaw scans `OPENCLAW_WORKSPACE/memory/.dreams/session-corpus/YYYY-MM-DD.txt`. Hermes, OpenCode, and Qoder currently run path probes and should use explicit handoff until their local chat schemas are verified. The archive skips turn context, base instructions, developer/system prompts, and renders user/assistant messages plus compact tool-call details to `_agents/<agent>/conversations/YYYY-MM-DD/<session-id>.md`.
+
+Conversation archive is an evidence layer, not a memory by itself. The next `review prepare` includes high-value archived conversation segments in the review pack, and only reviewed decisions can promote them into the index.
 
 When the user asks to sync the current chat, the active agent must write an explicit handoff summary and pipe it to `ingest <agent> --stdin`. The script cannot read hidden chat history by itself. A useful handoff should include: decisions, corrected assumptions, failed attempts, successful commands or steps, files changed, user preferences or constraints, open questions, and source links back to generated files where possible.
 
@@ -199,6 +223,7 @@ Portable context source:
 
 ```text
 _agents/<agent>/daily/        raw agent-submitted handoffs and project captures
+_agents/<agent>/conversations/ readable local conversation archive
 _index/openclaw_memory_index.json
 _index/user_profile.json
 _shared/shared_memory_index.json
@@ -358,6 +383,7 @@ Use:
 ```bash
 python scripts/main.py profile build
 python scripts/main.py context export all
+python scripts/main.py context export qoder
 ```
 
 Profile outputs:
