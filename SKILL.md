@@ -24,7 +24,7 @@ Use this skill as an OpenClaw companion and multi-agent handoff layer, not a rep
 - Treat `_context/` as a legacy compatibility output only; it is disabled by default unless `LEGACY_CONTEXT_ENABLED=true`.
 - Keep per-agent local stores under `_agents/<agent>/` with separate `daily/`, `summaries/`, `index.json`, and `permanent/`.
 - Keep portable shared distilled assets under `_shared/`, including shared memory, profile, context JSON, and adapter Markdown.
-- Reject direct legacy/session sources such as `.dreams/session-corpus` and `main/sessions/*.jsonl` unless OpenClaw has distilled them back to a valid daily-file evidence path.
+- Reject direct legacy/session sources such as `.dreams/session-corpus` and `main/sessions/*.jsonl`; when OpenClaw surfaces high-value session evidence, first curate a compact Obsidian evidence block under `_agents/openclaw/daily/YYYY-MM-DD.md`, then index that Obsidian block.
 - Remove only Obsidian daily copies, and only when no indexed memory references them.
 - Commit/push only through explicit `git sync` or `GIT_SYNC_ENABLED=true` autopilot.
 
@@ -74,9 +74,9 @@ When the user asks to run memory sync in agent mode:
 6. Run `python scripts/main.py status` and, if requested or configured, `python scripts/main.py git sync`.
 ```
 
-The script handles deterministic work: copying OpenClaw daily files into Obsidian, splitting source material, filtering obvious junk, preserving source anchors, validating decisions, writing JSON/Markdown surfaces, and keeping OpenClaw source files read-only.
+The script handles deterministic work: copying OpenClaw daily files into Obsidian, splitting source material, filtering obvious junk, preserving source anchors, curating high-value OpenClaw session evidence into Obsidian evidence blocks, validating decisions, writing JSON/Markdown surfaces, and keeping OpenClaw source files read-only.
 
-The current agent handles judgment work: candidate selection, summary, keywords, S1-S4 rating, process-memory classification, and duplicate/merge suggestions.
+The current agent handles judgment work: candidate selection, summary, keywords, S1-S4 rating, process-memory classification, and duplicate/merge suggestions. Treat `rule_suggestion` as a hint only. The agent decision is the source of truth in review mode.
 
 Decision output must follow this shape:
 
@@ -102,6 +102,8 @@ Decision output must follow this shape:
 ```
 
 Every candidate in the pack must have a decision. Use `"keep": false` for discarded material. Do not invent facts outside the candidate text. Preserve `source_file` and `source_anchor` by letting the script apply decisions rather than editing the index manually.
+
+The pack `_meta.coverage` section reports scanned daily files, segment count, skipped count, high-value skipped count, and curated session evidence count. If `high_value_skipped` is non-zero, inspect `skipped` before applying decisions; the filter may need tuning for the user's style.
 
 Use `MEMORY_SYNC_REVIEW_MODE=rules` only when the user explicitly wants the deterministic fallback, wants to save agent tokens, or needs a headless/offline run.
 
@@ -135,6 +137,7 @@ MEMORY.md promoted entries -> S4
 dreaming/deep candidates -> S3
 dreaming/rem possible lasting truths -> S3
 short-term-recall high-score or recalled candidates -> S2/S3
+curated high-value session-corpus evidence -> S2
 plain daily segments -> S1
 ```
 
@@ -154,7 +157,13 @@ openclaw_rem_hits
 openclaw_concept_tags
 ```
 
-Only import a distilled candidate when its evidence resolves to an existing `memory/YYYY-MM-DD.md` source that can be copied into Obsidian.
+Only import a distilled candidate directly when its evidence resolves to an existing `memory/YYYY-MM-DD.md` source that can be copied into Obsidian. Session-corpus evidence is never indexed as a raw source; high-value lines are first copied into `_agents/openclaw/daily/YYYY-MM-DD.md` with an `Original evidence` link, then reviewed like any other Obsidian-backed candidate.
+
+Filtering uses three layers:
+
+- `hard_blacklist_patterns`: discard unless the text is explicitly process memory.
+- `soft_blacklist_patterns`: discard routine status/log material only when no high-value signal is present.
+- `high_value_patterns`: allow operational fixes, corrections, failures, successful steps, user rules, and important project context to enter the review pack even if the text contains status-like words.
 
 ## Agent Handoff Ingest
 
@@ -277,7 +286,7 @@ OpenClaw example:
 执行命令：
 
 ```bash
-python /path/to/memory-sync/scripts/main.py search "关键词"
+python C:\Users\Administrator\.openclaw\workspace\skills\memory-sync\scripts\main.py search "关键词"
 ```
 
 流程：
@@ -339,7 +348,7 @@ Keyword extraction should favor project names, code terms, and configured domain
 Use `diagnose` before changing rules:
 
 ```bash
-python scripts/main.py diagnose "remember project retry policy API timeout WebSocket"
+python scripts/main.py diagnose "remember Feishu chat_id WebSocket AutoTestPlatform"
 ```
 
 ## User Profile And Agent Context

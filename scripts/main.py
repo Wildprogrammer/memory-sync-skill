@@ -167,23 +167,83 @@ TRIGGER_WORDS = [
 ]
 
 BLACKLIST_PATTERNS = [
-    r"\bheartbeat\b",
     r"\bself-check\b",
     r"\bsubagent context\b",
+    r"\bdry[- ]run\b",
+    r"自检",
+    r"闲聊",
+]
+
+SOFT_BLACKLIST_PATTERNS = [
+    r"\bheartbeat\b",
     r"\bgithub trending\b",
     r"\bgh trending\b",
+    r"\breview schedule\b",
     r"\btavily web search\b",
-    r"\bdry[- ]run\b",
+    r"\bgateway\b",
+    r"\bredis-server\b",
+    r"\bredis\s+service\b",
     r"心跳",
-    r"自检",
     r"异常上报",
     r"任务卡住",
     r"监控",
     r"gateway",
+    r"Redis 服务",
+    r"系统日志",
+    r"日志警告",
+    r"记忆文件状态",
+    r"记忆文件断层",
+    r"主动跟踪器",
+    r"主动任务跟踪",
+    r"已恢复正常",
     r"运行正常",
     r"无异常",
     r"安全检查",
-    r"闲聊",
+    r"严重逾期",
+    r"逾期\d+天",
+]
+
+HIGH_VALUE_PATTERNS = [
+    r"\bsuccess\b",
+    r"\bsucceeded\b",
+    r"\bverified\b",
+    r"\bpassed\b",
+    r"\bworks\b",
+    r"\bfix(?:ed)?\b",
+    r"\bfallback\b",
+    r"\btimeout\b",
+    r"\bdeploy(?:ed|ment)?\b",
+    r"\binstall(?:ed)?\b",
+    r"\bmodel\b",
+    r"\bonnx\b",
+    r"\bsupertonic\b",
+    r"\bgithub trending cron\b",
+    r"\bgh cli\b",
+    r"\btavily\b",
+    r"\b403\b",
+    r"\bfetch failed\b",
+    r"\bcontexttoken\b",
+    r"\beconnaborted\b",
+    r"成功",
+    r"验证通过",
+    r"可行",
+    r"最终方案",
+    r"正确做法",
+    r"修复",
+    r"已修复",
+    r"改成",
+    r"改为",
+    r"兜底",
+    r"失败",
+    r"超时",
+    r"错误",
+    r"部署",
+    r"安装",
+    r"模型",
+    r"需要用户确认",
+    r"后续",
+    r"经验",
+    r"教训",
 ]
 
 GENERIC_WORDS = {
@@ -363,8 +423,7 @@ PROFILE_LABEL_BLOCKLIST = GENERIC_WORDS | BROAD_MATCH_KEYWORDS | {
 
 PROJECT_HINT_KEYWORDS = {
     "memory-sync",
-    "agent-context",
-    "context-pack",
+    "autotestplatform",
     "openclaw",
     "obsidian",
     "codex",
@@ -406,14 +465,27 @@ def apply_rule_config() -> None:
     global LEGACY_SOURCE_MARKERS, MIN_COMPACT_LENGTH, STOPWORDS, STRONG_KEYWORD_ALLOWLIST
     global TRIGGER_WORDS, BLOCKED_KEYWORD_PATTERNS, OPENCLAW_RECALL_MIN_SCORE
     global OPENCLAW_RECALL_MIN_RECALLS, OPENCLAW_RECALL_MAX_CANDIDATES, OPENCLAW_DREAM_MIN_CONFIDENCE
+    global SOFT_BLACKLIST_PATTERNS, HIGH_VALUE_PATTERNS
 
     filters = read_json_config("filters.json")
     keywords = read_json_config("keywords.json")
     triggers = read_json_config("triggers.json")
 
-    configured = list_config(filters, "blacklist_patterns")
+    configured = list_config(filters, "hard_blacklist_patterns")
     if configured is not None:
         BLACKLIST_PATTERNS = configured
+    elif (configured := list_config(filters, "blacklist_patterns")) is not None:
+        # Backward compatible with older config files. New configs should prefer
+        # hard_blacklist_patterns plus soft_blacklist_patterns.
+        BLACKLIST_PATTERNS = configured
+
+    configured = list_config(filters, "soft_blacklist_patterns")
+    if configured is not None:
+        SOFT_BLACKLIST_PATTERNS = configured
+
+    configured = list_config(filters, "high_value_patterns")
+    if configured is not None:
+        HIGH_VALUE_PATTERNS = configured
 
     configured = list_config(filters, "blocked_source_markers")
     if configured is not None:
@@ -519,7 +591,7 @@ def env_bool(name: str, default: bool) -> bool:
 
 CONFIG = {
     "OPENCLAW_WORKSPACE": os.environ.get("OPENCLAW_WORKSPACE", "~/.openclaw/workspace"),
-    "VAULT_PATH": os.environ.get("OBSIDIAN_VAULT_PATH", "~/Documents/obsidian/vault"),
+    "VAULT_PATH": os.environ.get("OBSIDIAN_VAULT_PATH", "~/Documents/obsidian/belongme"),
     "HIT_COOLDOWN_HOURS": env_int("HIT_COOLDOWN_HOURS", 24),
     "S1_TTL_MIN_DAYS": env_int("S1_TTL_MIN_DAYS", 3),
     "S1_TTL_MAX_DAYS": env_int("S1_TTL_MAX_DAYS", 10),
@@ -927,11 +999,26 @@ def noise_reason_for_text(text: str) -> str | None:
     return blacklist_reason_for_text(text)
 
 
-def blacklist_reason_for_text(text: str) -> str | None:
+def pattern_reason(patterns: list[str], text: str, prefix: str) -> str | None:
     lowered = text.lower()
-    for pattern in BLACKLIST_PATTERNS:
+    for pattern in patterns:
         if re.search(pattern, lowered, re.IGNORECASE):
-            return f"blacklist:{pattern}"
+            return f"{prefix}:{pattern}"
+    return None
+
+
+def high_value_reason_for_text(text: str) -> str | None:
+    return pattern_reason(HIGH_VALUE_PATTERNS, text, "high_value")
+
+
+def blacklist_reason_for_text(text: str) -> str | None:
+    high_value = high_value_reason_for_text(text)
+    hard_reason = pattern_reason(BLACKLIST_PATTERNS, text, "blacklist")
+    if hard_reason and not high_value:
+        return hard_reason
+    soft_reason = pattern_reason(SOFT_BLACKLIST_PATTERNS, text, "soft_blacklist")
+    if soft_reason and not high_value:
+        return soft_reason
     return None
 
 
@@ -1476,6 +1563,7 @@ class MemorySync:
         processed_files: dict[str, str] = {}
         copied_daily_files: list[str] = []
         skipped: list[dict[str, str]] = []
+        coverage: Counter[str] = Counter()
         existing_uids = {
             str(memory.get("candidate_uid"))
             for memory in self.store.memories().values()
@@ -1483,6 +1571,7 @@ class MemorySync:
         }
 
         for path in sorted(memory_dir.glob("*.md")):
+            coverage["daily_files_scanned"] += 1
             original_rel = self.source_rel(path)
             copy_path = self.vault_daily_path(path)
             copy_rel = self.vault_rel(copy_path)
@@ -1496,15 +1585,20 @@ class MemorySync:
             copied_daily_files.append(copy_rel)
 
             for title, body, anchor in split_segments(text):
+                coverage["segments_seen"] += 1
                 compact = re.sub(r"\s+", "", body)
                 reason = blacklist_reason_for_text(body)
                 if reason or len(compact) < 40:
+                    high_value_reason = high_value_reason_for_text(body)
+                    if high_value_reason:
+                        coverage["high_value_skipped"] += 1
                     skipped.append(
                         {
                             "source_file": copy_rel,
                             "source_anchor": anchor,
                             "title_hint": title[:80],
                             "reason": reason or "too_short_for_agent_review",
+                            "high_value_reason": high_value_reason or "",
                         }
                     )
                     continue
@@ -1518,17 +1612,23 @@ class MemorySync:
                             "source_anchor": anchor,
                             "title_hint": title[:80],
                             "reason": "already_indexed_candidate_uid",
+                            "high_value_reason": high_value_reason_for_text(body) or "",
                         }
                     )
                     continue
+                coverage["daily_candidates"] += 1
                 candidates.append(self.review_candidate_from_memory(memory, body, "openclaw_daily", "openclaw"))
 
         distilled_count = 0
+        session_curated_count = 0
         if CONFIG["OPENCLAW_IMPORT_DISTILLED"]:
             distilled: list[dict[str, Any]] = []
             distilled.extend(self.collect_promoted_candidates())
             distilled.extend(self.collect_dream_candidates("deep", "openclaw-deep"))
             distilled.extend(self.collect_dream_candidates("rem", "openclaw-rem"))
+            session_curated = self.collect_session_corpus_candidates()
+            session_curated_count = len(session_curated)
+            distilled.extend(session_curated)
             distilled.extend(self.collect_recall_candidates())
             for memory in distilled:
                 body = str(memory.get("excerpt") or memory.get("summary") or memory.get("title") or "")
@@ -1541,11 +1641,15 @@ class MemorySync:
                             "source_anchor": str(memory.get("source_anchor", "")),
                             "title_hint": str(memory.get("title", ""))[:80],
                             "reason": "already_indexed_candidate_uid",
+                            "high_value_reason": high_value_reason_for_text(body) or "",
                         }
                     )
                     continue
+                coverage["distilled_candidates"] += 1
                 candidates.append(self.review_candidate_from_memory(memory, body, "openclaw_distilled", "openclaw"))
             distilled_count = len(distilled)
+        coverage["candidate_count"] = len(candidates)
+        coverage["skipped_count"] = len(skipped)
 
         return {
             "_meta": {
@@ -1555,6 +1659,8 @@ class MemorySync:
                 "candidate_count": len(candidates),
                 "copied_daily_count": len(copied_daily_files),
                 "distilled_candidate_count": distilled_count,
+                "session_curated_candidate_count": session_curated_count,
+                "coverage": dict(coverage),
                 "instructions": [
                     "The current agent must review candidates and produce decisions JSON.",
                     "Keep only evidence-backed memories; do not invent facts outside candidate text.",
@@ -1581,6 +1687,16 @@ class MemorySync:
         self.write_json_atomic(path, pack)
         self.log(f"Agent review pack written: {self.vault_rel(path)}")
         self.log(f"Candidates: {pack['_meta']['candidate_count']}")
+        coverage = pack.get("_meta", {}).get("coverage", {})
+        if isinstance(coverage, dict):
+            self.log(
+                "Coverage: "
+                f"daily_files={coverage.get('daily_files_scanned', 0)}, "
+                f"segments={coverage.get('segments_seen', 0)}, "
+                f"skipped={coverage.get('skipped_count', 0)}, "
+                f"high_value_skipped={coverage.get('high_value_skipped', 0)}, "
+                f"session_curated={pack['_meta'].get('session_curated_candidate_count', 0)}"
+            )
         self.log("Next: current agent writes decisions JSON, then run:")
         self.log("  python scripts/main.py review apply <decisions.json>")
         return 0
@@ -1673,6 +1789,8 @@ class MemorySync:
                 self.log(f"- ... {len(missing) - 20} more")
             return 1
         stats: Counter[str] = Counter()
+        reviewed = self.store.data[INDEX_META].setdefault("reviewed_candidates", {})
+        reviewed_at = now_iso()
         for decision in decisions:
             candidate_id = str(decision.get("candidate_id", "")).strip()
             pack_item = by_id.get(candidate_id)
@@ -1680,6 +1798,14 @@ class MemorySync:
                 stats["unknown"] += 1
                 self.log(f"SKIP unknown candidate_id: {candidate_id}")
                 continue
+            reviewed[candidate_id] = {
+                "reviewed_at": reviewed_at,
+                "keep": decision.get("keep") is not False,
+                "reason": str(decision.get("reason", "")).strip(),
+                "source_file": pack_item.get("source_file", ""),
+                "source_anchor": pack_item.get("source_anchor", ""),
+                "text_hash": pack_item.get("text_hash", ""),
+            }
             if decision.get("keep") is False:
                 stats["discarded"] += 1
                 continue
@@ -1705,6 +1831,23 @@ class MemorySync:
         for source, digest in pack.get("processed_files", {}).items():
             if isinstance(source, str) and isinstance(digest, str):
                 processed[source] = digest
+        skipped_audit = self.store.data[INDEX_META].setdefault("skipped_review_candidates", {})
+        for item in pack.get("skipped", []):
+            if not isinstance(item, dict):
+                continue
+            key = candidate_uid(
+                "skipped-review",
+                f"{item.get('source_file', '')}:{item.get('source_anchor', '')}",
+                f"{item.get('title_hint', '')}:{item.get('reason', '')}",
+            )
+            skipped_audit[key] = {
+                "reviewed_at": reviewed_at,
+                "source_file": item.get("source_file", ""),
+                "source_anchor": item.get("source_anchor", ""),
+                "title_hint": item.get("title_hint", ""),
+                "reason": item.get("reason", ""),
+                "high_value_reason": item.get("high_value_reason", ""),
+            }
 
         expired = self.apply_expiry()
         copied = [self.vault_path / rel for rel in pack.get("copied_daily_files", []) if isinstance(rel, str)]
@@ -2057,6 +2200,178 @@ class MemorySync:
                         metadata,
                     )
                 )
+        return candidates
+
+    def parse_session_corpus_blocks(self, path: Path) -> list[dict[str, Any]]:
+        text = path.read_text(encoding="utf-8", errors="replace")
+        blocks: list[dict[str, Any]] = []
+        current: dict[str, Any] | None = None
+        for line_no, line in enumerate(text.splitlines(), start=1):
+            candidate_match = re.match(r"\s*-\s+Candidate:\s*(.+?)\s*$", line)
+            if candidate_match:
+                if current:
+                    blocks.append(current)
+                current = {
+                    "body": candidate_match.group(1).strip(),
+                    "line_no": line_no,
+                    "confidence": 0.0,
+                    "evidence": "",
+                }
+                continue
+            if not current:
+                continue
+            confidence_match = re.search(r"confidence:\s*([0-9.]+)", line)
+            if confidence_match:
+                current["confidence"] = float(confidence_match.group(1))
+            evidence_match = re.search(r"evidence:\s*(memory/\.dreams/session-corpus/[^\s]+)", line)
+            if evidence_match:
+                current["evidence"] = evidence_match.group(1).strip()
+        if current:
+            blocks.append(current)
+        return blocks
+
+    def session_candidate_is_curatable(self, body: str) -> bool:
+        if not high_value_reason_for_text(body):
+            return False
+        lowered = body.lower()
+        report_markers = [
+            "write a dream diary entry",
+            "心跳自检报告",
+            "heartbeat 报告",
+            "系统状态",
+            "待跟进事项",
+            "改进建议",
+            "review schedule",
+        ]
+        resolution_markers = [
+            "root cause",
+            "final fix",
+            "correct approach",
+            "solved",
+            "verified",
+            "根因",
+            "问题根源",
+            "解决方案",
+            "修复内容",
+            "验证",
+            "验证通过",
+            "已解决",
+            "最终方案",
+            "正确做法",
+            "决定",
+            "约定",
+            "改为",
+            "改成",
+            "失败原因",
+        ]
+        if any(marker in lowered for marker in report_markers) and not any(marker in lowered for marker in resolution_markers):
+            return False
+        if classify_process_memory(body):
+            return True
+        topic_markers = [
+            "supertonic",
+            "contexttoken",
+            "volcengine",
+            "npmjs",
+            "github trending",
+            "gh trending",
+            "tavily",
+            "飞书插件",
+            "微信插件",
+            "记忆同步",
+        ]
+        has_topic = any(marker in lowered for marker in topic_markers)
+        has_resolution = any(marker in lowered for marker in resolution_markers)
+        if "github trending" in lowered or "gh trending" in lowered:
+            operational_markers = [
+                "fix",
+                "fixed",
+                "fallback",
+                "gh cli",
+                "tavily",
+                "timeout",
+                "403",
+                "cron",
+                "updated",
+                "修复",
+                "兜底",
+                "超时",
+                "改成",
+                "改为",
+            ]
+            return any(marker in lowered for marker in operational_markers)
+        return has_topic and has_resolution
+
+    def write_curated_session_evidence(self, day: str, uid: str, body: str, evidence: str) -> tuple[str, str]:
+        path = self.agent_dir("openclaw") / "daily" / f"{day}.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        marker = f"<!-- memory-sync-session-candidate:{uid} -->"
+        title = first_title(body)
+        if path.exists():
+            text = path.read_text(encoding="utf-8", errors="replace")
+        else:
+            text = f"# OpenClaw curated session evidence {day}\n\n"
+        lines = text.splitlines()
+        if marker not in text:
+            if text and not text.endswith("\n"):
+                text += "\n"
+            if "## Curated Session Evidence" not in text:
+                text += "\n## Curated Session Evidence\n"
+            text += (
+                f"\n### {title[:100]}\n"
+                f"{marker}\n"
+                f"Original evidence: `{evidence}`\n\n"
+                f"{body.strip()}\n"
+            )
+            self.write_text_atomic(path, text.rstrip() + "\n")
+            lines = (text.rstrip() + "\n").splitlines()
+        start = next((index + 1 for index, line in enumerate(lines) if marker in line), len(lines))
+        end = min(len(lines), start + max(1, len(body.splitlines())) + 2)
+        return self.vault_rel(path), f"line {start}-{end}"
+
+    def collect_session_corpus_candidates(self) -> list[dict[str, Any]]:
+        dream_dir = self.openclaw_path / "memory" / "dreaming" / "light"
+        if not dream_dir.exists():
+            return []
+        candidates: list[dict[str, Any]] = []
+        for path in sorted(dream_dir.glob("*.md"))[-10:]:
+            for block in self.parse_session_corpus_blocks(path):
+                body = str(block.get("body") or "").strip()
+                evidence = str(block.get("evidence") or "").strip()
+                confidence = float(block.get("confidence") or 0)
+                if confidence and confidence < OPENCLAW_DREAM_MIN_CONFIDENCE:
+                    continue
+                if not evidence or not self.session_candidate_is_curatable(body):
+                    continue
+                day_match = re.search(r"session-corpus/(\d{4}-\d{2}-\d{2})\.txt", evidence)
+                day = day_match.group(1) if day_match else path.stem[:10]
+                uid = candidate_uid("openclaw-session-curated", evidence, body)
+                source_file, anchor = self.write_curated_session_evidence(day, uid, body, evidence)
+                metadata = {
+                    "candidate_origin": "openclaw-session-curated",
+                    "candidate_uid": uid,
+                    "openclaw_confidence": confidence,
+                    "openclaw_evidence": evidence,
+                    "original_session_evidence": evidence,
+                    "quality_score": max(0.7, min(1.0, confidence or 0.72)),
+                    "source_agent": "openclaw",
+                    "source_confidence": "curated_session_evidence",
+                }
+                memory = self.build_distilled_memory(
+                    first_title(body),
+                    body,
+                    source_file,
+                    anchor,
+                    evidence,
+                    "openclaw-session-curated",
+                    "S2",
+                    metadata,
+                )
+                memory["source_type"] = "agent_ingest"
+                memory["original_context_file"] = source_file
+                memory["original_context_anchor"] = anchor
+                memory["sources"][0]["original_file"] = evidence
+                candidates.append(memory)
         return candidates
 
     def collect_promoted_candidates(self) -> list[dict[str, Any]]:
@@ -3254,9 +3569,9 @@ class MemorySync:
             ("risk_preference", "do_not_exfiltrate", ["private", "隐私", "exfiltrate", "nothing goes external", "外部"], "Treat private data and external actions carefully."),
             ("workflows", "git_versioned_memory", ["git", "github", "版本", "version", "push", "commit"], "Use Git/GitHub for versioned memory assets."),
             ("workflows", "obsidian_memory_surface", ["obsidian", "vault", "知识库"], "Use Obsidian as the readable memory surface."),
-            ("workflows", "automation_testing", ["自动化测试", "test automation", "fastapi", "vue", "pytest"], "Test automation work is an important recurring project."),
+            ("workflows", "automation_testing_platform", ["autotestplatform", "自动化测试", "fastapi", "vue", "pytest"], "Automation testing platform is an important recurring project."),
             ("active_projects", "memory-sync", ["memory-sync", "openclaw memory", "agent context", "user_profile", "agent_context"], "Memory-sync is the current context portability project."),
-            ("active_projects", "test-automation-platform", ["自动化测试平台", "test automation platform"], "A test automation platform is a recurring implementation project."),
+            ("active_projects", "autotestplatform", ["autotestplatform", "自动化测试平台"], "AutoTestPlatform is a recurring implementation project."),
             ("tool_preferences", "powershell_python_js", ["powershell", "python", "javascript", "pytest"], "Comfortable with PowerShell, Python, JavaScript, and pytest workflows."),
             ("tool_preferences", "multi_agent_context", ["codex", "claude", "openclaw", "opencode", "hermes"], "Needs low-cost switching across multiple agents."),
             ("prompt_preferences", "action_oriented", ["多做事", "主动", "proactive", "解决", "执行"], "Prefer action-oriented agents that inspect, implement, and verify."),
