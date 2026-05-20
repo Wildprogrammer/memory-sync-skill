@@ -136,7 +136,7 @@ High-value process memories, including successful procedures, corrections, failu
 | Codex | Engineering handoff and project-state capture |
 | Claude | Long-context writing, reasoning, and handoff summaries |
 | OpenCode | Code-agent context portability |
-| hermes-agent | Agent-to-agent handoff context |
+| hermes-agent | Local SQLite conversation archive, installed skill inventory, agent-to-agent handoff context |
 | Qoder | Explicit handoff and shared context portability while local chat schemas remain experimental |
 
 ## Relationship To OpenClaw

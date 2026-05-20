@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import sys
 from collections import Counter
@@ -565,6 +566,16 @@ def load_env(path: Path) -> None:
 load_env(ROOT / ".env")
 
 
+def default_hermes_home() -> str:
+    if os.name == "nt":
+        local_appdata = os.environ.get("LOCALAPPDATA", "")
+        if local_appdata:
+            candidate = Path(local_appdata) / "hermes"
+            if candidate.exists():
+                return str(candidate)
+    return "~/.hermes"
+
+
 def env_int(name: str, default: int) -> int:
     value = os.environ.get(name)
     if not value:
@@ -611,7 +622,7 @@ CONFIG = {
     "REVIEW_MODE": os.environ.get("MEMORY_SYNC_REVIEW_MODE", "agent").strip().lower() or "agent",
     "CODEX_HOME": os.environ.get("CODEX_HOME", "~/.codex"),
     "CLAUDE_HOME": os.environ.get("CLAUDE_HOME", "~/.claude"),
-    "HERMES_HOME": os.environ.get("HERMES_HOME", "~/.hermes"),
+    "HERMES_HOME": os.environ.get("HERMES_HOME") or default_hermes_home(),
     "QODER_HOME": os.environ.get("QODER_HOME", os.environ.get("APPDATA", "") + "/Qoder"),
 }
 
@@ -641,6 +652,23 @@ def parse_jsonl_time(value: str | None) -> datetime | None:
     if parsed.tzinfo is None:
         return parsed
     return parsed.astimezone()
+
+
+def parse_unix_timestamp(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return parse_jsonl_time(str(value))
+    if numeric <= 0:
+        return None
+    if numeric > 10_000_000_000:
+        numeric = numeric / 1000
+    try:
+        return datetime.fromtimestamp(numeric)
+    except (OverflowError, OSError, ValueError):
+        return None
 
 
 def expand_path(value: str) -> Path:
@@ -3547,6 +3575,7 @@ class MemorySync:
             ("opencode", "user", home / ".config" / "opencode" / "skills"),
             ("opencode", "windows-user", home / "AppData" / "Roaming" / "opencode" / "skills"),
             ("hermes-agent", "user", home / ".hermes-agent" / "skills"),
+            ("hermes-agent", "home", self.hermes_home() / "skills"),
             ("qoder", "user", home / ".qoder" / "skills"),
             ("qoder", "extensions", home / ".qoder" / "extensions"),
             ("shared", "agents", home / ".agents" / "skills"),
@@ -3555,6 +3584,9 @@ class MemorySync:
         if appdata:
             roots.append(("openclaw", "official-npm", Path(appdata) / "npm" / "node_modules" / "openclaw" / "skills"))
             roots.append(("qoder", "appdata", Path(appdata) / "Qoder" / "User" / "globalStorage"))
+        local_appdata = os.environ.get("LOCALAPPDATA")
+        if local_appdata:
+            roots.append(("hermes-agent", "localappdata", Path(local_appdata) / "hermes" / "skills"))
         extra = os.environ.get("MEMORY_SYNC_SKILL_DIRS", "")
         for index, raw in enumerate([item for item in extra.split(os.pathsep) if item.strip()], start=1):
             roots.append(("custom", f"extra-{index}", expand_path(raw)))
@@ -4023,6 +4055,8 @@ class MemorySync:
             {"agent": "opencode", "label": "user", "path": home / ".config" / "opencode" / "AGENTS.md", "weight": 0.75},
             {"agent": "opencode", "label": "windows-user", "path": home / "AppData" / "Roaming" / "opencode" / "AGENTS.md", "weight": 0.75},
             {"agent": "hermes-agent", "label": "user", "path": home / ".hermes-agent" / "AGENTS.md", "weight": 0.65},
+            {"agent": "hermes-agent", "label": "home", "path": self.hermes_home() / "SOUL.md", "weight": 0.45},
+            {"agent": "hermes-agent", "label": "home", "path": self.hermes_home() / "config.yaml", "weight": 0.4},
             {"agent": "qoder", "label": "user", "path": home / ".qoder" / "AGENTS.md", "weight": 0.55},
         ]
 
@@ -4617,6 +4651,12 @@ class MemorySync:
     def hermes_home(self) -> Path:
         return expand_path(str(CONFIG["HERMES_HOME"]))
 
+    def hermes_state_db(self) -> Path:
+        configured = os.environ.get("HERMES_STATE_DB", "").strip()
+        if configured:
+            return expand_path(configured)
+        return self.hermes_home() / "state.db"
+
     def qoder_home(self) -> Path:
         return expand_path(str(CONFIG["QODER_HOME"]))
 
@@ -4901,6 +4941,123 @@ class MemorySync:
             return {}
         return {(day, session_id): conversation}
 
+    def read_hermes_state_db(self, path: Path, target_date: str | None, all_dates: bool) -> dict[tuple[str, str], dict[str, Any]]:
+        conversations: dict[tuple[str, str], dict[str, Any]] = {}
+        uri = f"file:{path.as_posix()}?mode=ro"
+        try:
+            connection = sqlite3.connect(uri, uri=True)
+            connection.row_factory = sqlite3.Row
+        except sqlite3.Error as exc:
+            self.log(f"ERROR cannot open Hermes state DB: {path} ({exc})")
+            return {}
+
+        try:
+            tables = {
+                row["name"]
+                for row in connection.execute("select name from sqlite_master where type='table'")
+                if row["name"]
+            }
+            required = {"sessions", "messages"}
+            if not required.issubset(tables):
+                self.log(f"ERROR Hermes state DB missing required tables: {sorted(required - tables)}")
+                return {}
+            rows = connection.execute(
+                """
+                select
+                    m.id as message_id,
+                    m.session_id,
+                    m.role,
+                    m.content,
+                    m.tool_call_id,
+                    m.tool_calls,
+                    m.tool_name,
+                    m.timestamp,
+                    m.finish_reason,
+                    m.reasoning,
+                    m.reasoning_content,
+                    s.source,
+                    s.model,
+                    s.title,
+                    s.started_at,
+                    s.ended_at,
+                    s.message_count,
+                    s.tool_call_count
+                from messages m
+                left join sessions s on s.id = m.session_id
+                order by m.timestamp, m.id
+                """
+            ).fetchall()
+        except sqlite3.Error as exc:
+            self.log(f"ERROR cannot read Hermes state DB: {path} ({exc})")
+            return {}
+        finally:
+            connection.close()
+
+        for row in rows:
+            timestamp = parse_unix_timestamp(row["timestamp"])
+            if not timestamp:
+                continue
+            day = timestamp.date().isoformat()
+            if not all_dates and day != target_date:
+                continue
+
+            session_id = str(row["session_id"] or "hermes-session")
+            key = (day, session_id)
+            if key not in conversations:
+                conversations[key] = {
+                    "date": day,
+                    "session_id": session_id,
+                    "meta": {
+                        "source_file": path.as_posix(),
+                        "originator": "Hermes Agent state.db",
+                        "cwd": "",
+                        "source": row["source"] or "hermes",
+                        "model": row["model"] or "",
+                        "title": row["title"] or "",
+                        "started_at": row["started_at"],
+                        "ended_at": row["ended_at"],
+                    },
+                    "events": [],
+                }
+
+            base_event = {
+                "time": timestamp.replace(microsecond=0).isoformat(),
+                "line": row["message_id"],
+                "source_file": path.as_posix(),
+            }
+            role = str(row["role"] or "").lower()
+            content = str(row["content"] or "").strip()
+            if role in {"user", "assistant", "system"} and content:
+                if role == "system":
+                    continue
+                event = dict(base_event)
+                event.update({"kind": "message", "role": role, "text": content})
+                conversations[key]["events"].append(event)
+
+            tool_name = str(row["tool_name"] or "").strip()
+            tool_calls_raw = str(row["tool_calls"] or "").strip()
+            if tool_name or tool_calls_raw:
+                arguments: dict[str, Any] = {}
+                if tool_calls_raw:
+                    try:
+                        parsed = json.loads(tool_calls_raw)
+                    except json.JSONDecodeError:
+                        parsed = tool_calls_raw
+                    arguments = parsed if isinstance(parsed, dict) else {"raw": parsed}
+                event = dict(base_event)
+                event.update(
+                    {
+                        "kind": "tool_call",
+                        "name": tool_name or "hermes_tool",
+                        "call_id": row["tool_call_id"],
+                        "summary": f"hermes tool: {tool_name or 'tool call'}",
+                        "arguments": arguments,
+                    }
+                )
+                conversations[key]["events"].append(event)
+
+        return {key: value for key, value in conversations.items() if value.get("events")}
+
     def codex_conversation_markdown(self, conversation: dict[str, Any]) -> str:
         return self.agent_conversation_markdown("codex", conversation)
 
@@ -5084,11 +5241,20 @@ class MemorySync:
                 conversations[key] = value
         return self.write_conversation_archive("openclaw", conversations, len(files))
 
+    def cmd_conversations_scan_hermes(self, target_date: str | None = None, all_dates: bool = False) -> int:
+        if not all_dates and not target_date:
+            target_date = datetime.now().date().isoformat()
+        db = self.hermes_state_db()
+        if not db.exists():
+            self.log(f"ERROR Hermes state DB not found: {db}")
+            return 1
+        conversations = self.read_hermes_state_db(db, target_date, all_dates)
+        return self.write_conversation_archive("hermes-agent", conversations, 1)
+
     def cmd_conversations_probe(self, agent: str) -> int:
         if agent == "hermes-agent":
-            db = self.hermes_home() / "state.db"
-            self.log(f"Hermes conversation scan is not enabled by default. Expected state DB: {db}")
-            self.log("Use explicit handoff until a stable local schema is verified.")
+            db = self.hermes_state_db()
+            self.log(f"Hermes state DB: {db} exists={db.exists()}")
             return 0
         if agent == "opencode":
             self.log("OpenCode conversation scan is not implemented yet; use explicit handoff or configure a transcript path.")
@@ -5116,7 +5282,9 @@ class MemorySync:
             return self.cmd_conversations_scan_claude(target_date=target_date, all_dates=all_dates)
         if agent == "openclaw":
             return self.cmd_conversations_scan_openclaw(target_date=target_date, all_dates=all_dates)
-        if agent in {"hermes-agent", "opencode", "qoder"}:
+        if agent == "hermes-agent":
+            return self.cmd_conversations_scan_hermes(target_date=target_date, all_dates=all_dates)
+        if agent in {"opencode", "qoder"}:
             return self.cmd_conversations_probe(agent)
         self.log(f"ERROR conversation scan is not implemented for: {agent}")
         return 1

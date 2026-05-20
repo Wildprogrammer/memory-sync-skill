@@ -1,6 +1,6 @@
 ---
 name: memory-sync
-description: Synchronize OpenClaw memory, Codex/Claude/OpenClaw conversation archives, and multi-agent handoffs into Obsidian as a fast retention and context portability layer. Copies OpenClaw daily files, imports recall/dreaming/MEMORY candidates, archives local Codex/Claude/OpenClaw chats, preserves non-daily agent knowledge into Personal/Agent Knowledge, syncs installed skill inventories, ingests Codex/Claude/OpenClaw/OpenCode/hermes-agent/Qoder handoff summaries, keeps per-agent stores under _agents, builds shared assets under _shared, maintains JSON/Markdown indexes, builds user profile, exports context packs, applies S1-S4 TTL, supports trigger check/hit, safe Obsidian-only cleanup, and optional Git/GitHub sync. Use for memory sync, conversations scan, ingest codex, candidates, handoff openclaw, skills sync, search, profile build, context export, hermes-agent handoff, git sync, status, or autopilot.
+description: Synchronize OpenClaw memory, Codex/Claude/OpenClaw/Hermes conversation archives, and multi-agent handoffs into Obsidian as a fast retention and context portability layer. Copies OpenClaw daily files, imports recall/dreaming/MEMORY candidates, archives local Codex/Claude/OpenClaw/Hermes chats, preserves non-daily agent knowledge into Personal/Agent Knowledge, syncs installed skill inventories, ingests Codex/Claude/OpenClaw/OpenCode/hermes-agent/Qoder handoff summaries, keeps per-agent stores under _agents, builds shared assets under _shared, maintains JSON/Markdown indexes, builds user profile, exports context packs, applies S1-S4 TTL, supports trigger check/hit, safe Obsidian-only cleanup, and optional Git/GitHub sync. Use for memory sync, conversations scan, ingest codex, candidates, handoff openclaw, skills sync, search, profile build, context export, hermes-agent handoff, git sync, status, or autopilot.
 ---
 
 # Memory Sync
@@ -18,7 +18,7 @@ Use this skill as an OpenClaw companion and multi-agent handoff layer, not a rep
 - Preserve non-daily agent knowledge such as `MEMORY.md`, `USER.md`, `AGENTS.md`, and tool/config notes into `Personal/Agent Knowledge/<agent>/`.
 - Detect high-value process memories such as success patterns, corrections, failure lessons, and user rules; these enter as S2 `process_memory` records.
 - Ingest explicit handoff summaries from Codex, Claude, OpenClaw, OpenCode, hermes-agent, and Qoder into their own `_agents/<agent>/daily/` lane before indexing.
-- Archive Codex Desktop, Claude Code, and OpenClaw session-corpus conversation history into `_agents/<agent>/conversations/YYYY-MM-DD/` by event timestamp where available, not file directory date.
+- Archive Codex Desktop, Claude Code, OpenClaw session-corpus, and Hermes `state.db` conversation history into `_agents/<agent>/conversations/YYYY-MM-DD/` by event timestamp where available, not file directory date.
 - Build `_index/user_profile.json` and `03-Reference/User画像.md` from USER.md, the memory index, and local agent configuration.
 - Export portable adapter context under `_shared/context/` for Codex, Claude, OpenClaw, OpenCode, hermes-agent, and Qoder.
 - Export installed skill inventory under `_shared/agent_skills.json`, `_agents/<agent>/skills.json`, and `Personal/Agent Knowledge/Agent Skills.md`.
@@ -44,6 +44,7 @@ python scripts/main.py ingest opencode "decision: ..."
 python scripts/main.py conversations scan codex --date 2026-05-20
 python scripts/main.py conversations scan claude --date 2026-05-13
 python scripts/main.py conversations scan openclaw --date 2026-05-19
+python scripts/main.py conversations scan hermes-agent --date 2026-05-20
 python scripts/main.py conversations scan all --date 2026-05-20
 python scripts/main.py candidates
 python scripts/main.py handoff openclaw
@@ -196,10 +197,11 @@ For local chat history, prefer conversation archive over `ingest <agent> --proje
 python scripts/main.py conversations scan codex --date 2026-05-20
 python scripts/main.py conversations scan claude --date 2026-05-13
 python scripts/main.py conversations scan openclaw --date 2026-05-19
+python scripts/main.py conversations scan hermes-agent --date 2026-05-20
 python scripts/main.py conversations scan all --all
 ```
 
-Codex Desktop may keep a long thread in the rollout file for the day the session was created, not the day a later message was sent. The scanner therefore scans all `CODEX_HOME/sessions/**/rollout-*.jsonl` files and groups records by each event's internal timestamp. Claude Code scans `CLAUDE_HOME/projects/**/*.jsonl`. OpenClaw scans `OPENCLAW_WORKSPACE/memory/.dreams/session-corpus/YYYY-MM-DD.txt`. Hermes, OpenCode, and Qoder currently run path probes and should use explicit handoff until their local chat schemas are verified. The archive skips turn context, base instructions, developer/system prompts, and renders user/assistant messages plus compact tool-call details to `_agents/<agent>/conversations/YYYY-MM-DD/<session-id>.md`.
+Codex Desktop may keep a long thread in the rollout file for the day the session was created, not the day a later message was sent. The scanner therefore scans all `CODEX_HOME/sessions/**/rollout-*.jsonl` files and groups records by each event's internal timestamp. Claude Code scans `CLAUDE_HOME/projects/**/*.jsonl`. OpenClaw scans `OPENCLAW_WORKSPACE/memory/.dreams/session-corpus/YYYY-MM-DD.txt`. Hermes scans `HERMES_HOME/state.db` (`sessions` + `messages` tables); on Windows the default is `%LOCALAPPDATA%/hermes` when that directory exists. OpenCode and Qoder currently run path probes and should use explicit handoff until their local chat schemas are verified. The archive skips turn context, base instructions, developer/system prompts, and renders user/assistant messages plus compact tool-call details to `_agents/<agent>/conversations/YYYY-MM-DD/<session-id>.md`.
 
 Conversation archive is an evidence layer, not a memory by itself. The next `review prepare` includes high-value archived conversation segments in the review pack, and only reviewed decisions can promote them into the index.
 
@@ -275,7 +277,7 @@ Personal/Agent Knowledge/<agent>/Agent Skills.md
 
 `03-Reference/Agent Skills.md` is the Obsidian navigation entry. `Personal/Agent Knowledge/Agent Skills.md` is the personal navigation entry. The detailed human-readable inventory is split by agent under `Personal/Agent Knowledge/<agent>/Agent Skills.md`, while `_agents/<agent>/skills.json` remains the machine-readable per-agent store.
 
-The skill inventory records skill name, function summary, agent, level/source directory, local path, modified time, hash, enabled state, and frontmatter validity. OpenClaw is scanned across official npm, workspace, and user skill directories so multi-level installations are not missed. Markdown output language is inferred from the user's local profile/rules, or can be forced with `MEMORY_SYNC_LANGUAGE=zh` or `MEMORY_SYNC_LANGUAGE=en`.
+The skill inventory records skill name, function summary, agent, level/source directory, local path, modified time, hash, enabled state, and frontmatter validity. OpenClaw is scanned across official npm, workspace, and user skill directories so multi-level installations are not missed. Hermes is scanned from `HERMES_HOME/skills` and `%LOCALAPPDATA%/hermes/skills` on Windows. Markdown output language is inferred from the user's local profile/rules, or can be forced with `MEMORY_SYNC_LANGUAGE=zh` or `MEMORY_SYNC_LANGUAGE=en`.
 
 ## Trigger Logic
 
