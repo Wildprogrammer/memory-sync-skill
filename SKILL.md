@@ -86,6 +86,72 @@ The script handles deterministic work: copying OpenClaw daily files into Obsidia
 
 The current agent handles judgment work: candidate selection, summary, keywords, S1-S4 rating, process-memory classification, and duplicate/merge suggestions. Treat `rule_suggestion` as a hint only. The agent decision is the source of truth in review mode.
 
+### Candidate Quality Gate
+
+This quality gate applies only to promotion into the memory index, memory cards, user profile, and shared context. It must not prevent raw source archiving. Keep OpenClaw daily copies, local conversation archives, handoff records, and personal knowledge files available as evidence first; then decide whether a segment deserves to become memory.
+
+When reviewing candidates, keep only durable knowledge. A candidate should be kept only if it helps a future agent make a better decision, avoid a mistake, understand the user, continue a task, or reuse a solution.
+
+Discard by default:
+
+- routine heartbeat or self-check reports
+- "system normal", "gateway healthy", "redis running", "no errors", "all checks passed"
+- repeated overdue counters with no new decision, owner, deadline, or action
+- transient logs, raw tool outputs, dependency install noise, and status snapshots
+- same-day repetitions of an already captured topic
+
+Keep status-like material only when it contains:
+
+- a new failure, regression, outage, timeout, or error
+- recovery from a previous failure
+- a configuration, environment, dependency, credential, or path change
+- a user-visible decision, correction, constraint, or preference
+- a todo, owner, deadline, blocker, or next action
+- a reusable lesson, command, API limit, workflow, or debugging path
+
+Duplicate rule:
+
+- Same-day same-topic candidates must be merged.
+- Number-only changes such as "overdue 23 days" -> "overdue 27 days" are not new memories.
+- Keep the newest useful evidence and append older source references.
+- Use `merge_with` instead of creating another memory when the topic already exists.
+- If the new candidate only repeats a healthy/routine status, discard it instead of merging.
+
+Decision `reason` should name the value type or discard reason. Good keep reasons include `decision`, `lesson`, `correction`, `todo`, `state_change`, `knowledge`, and `user_rule`. Good discard reasons include `routine_status`, `duplicate_status`, `tool_noise`, `too_transient`, `no_future_value`, and `covered_by_existing_memory`.
+
+### 候选记忆质量门槛
+
+这个质量门槛只限制“候选内容是否晋升为索引记忆、记忆卡片、用户画像和共享上下文”，不阻止原始来源归档。OpenClaw daily 副本、本地对话归档、handoff 记录和个人知识文件仍应先保存为证据层，再由 agent 判断哪些片段值得成为记忆。
+
+审核候选记忆时，只保留能帮助未来 agent 少走弯路的内容。它至少应该能帮助未来 agent 做出更好决策、避免错误、理解用户、继续任务，或复用解决方案。
+
+默认丢弃：
+
+- 日常心跳、自检、健康检查
+- “系统正常”“Gateway 健康”“Redis 正常运行”“无错误”“检查通过”
+- 没有新决策、负责人、截止时间或行动项的重复逾期数字
+- 临时日志、原始工具输出、依赖安装噪声、普通状态快照
+- 同一天同主题的重复内容
+
+只有在包含以下信息时，才保留状态类内容：
+
+- 新失败、回归、宕机、超时或错误
+- 从之前失败中恢复
+- 配置、环境、依赖、凭据或路径变化
+- 用户可见的决策、纠正、约束或偏好
+- 待办、负责人、截止时间、阻塞点或下一步
+- 可复用的教训、命令、API 限制、工作流或排障路径
+
+重复规则：
+
+- 同一天同主题必须合并。
+- “逾期 23 天”变成“逾期 27 天”这类数字变化不是新记忆。
+- 保留最新且有用的证据，旧来源作为 source 追加。
+- 已有同主题记忆时使用 `merge_with`，不要创建新的 memory。
+- 如果新候选只是重复健康状态，直接丢弃，不要合并。
+
+`reason` 字段必须写明保留价值或丢弃原因。保留原因可以是 `decision`、`lesson`、`correction`、`todo`、`state_change`、`knowledge`、`user_rule`。丢弃原因可以是 `routine_status`、`duplicate_status`、`tool_noise`、`too_transient`、`no_future_value`、`covered_by_existing_memory`。
+
 Decision output must follow this shape:
 
 ```json
