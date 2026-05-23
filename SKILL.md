@@ -546,6 +546,7 @@ Obsidian-readable outputs:
 
 ```text
 Dashboard/Memory Dashboard.md
+Dashboard/Memory Directory.md
 Memories/memory_001.md
 Memories/memory_002.md
 ```
@@ -555,6 +556,45 @@ Memory page file names are stable and ID-only (`memory_001.md`) so Obsidian, Git
 The profile is evidence-backed. USER.md and explicit agent configuration get higher weight; S3/S4 and hit-promoted memories get strong weight; S1/S2 provide weaker recent context. Do not treat profile claims as truth unless they have evidence references.
 
 Use `context doctor` to check whether the profile/context pack is missing major signals or stale.
+
+## Human-Readable Notes And Directory
+
+Keep this simple. Do not create a separate metadata system for explanatory text.
+
+When the skill or the current agent creates a new human-facing Markdown file, add one short explanatory blockquote below the title in the current user's language. Use `MEMORY_SYNC_LANGUAGE` when it is set; otherwise infer the language from USER.md, AGENTS.md, the existing profile, or the user's current conversation language.
+
+Add the note to generated or agent-created navigation and summary files, such as:
+
+```text
+Dashboard/*.md
+Memories/memory_*.md
+Context/*.md
+Personal/Agent Knowledge/**/*.md
+Sources/<agent>/conversation-summaries/**/*.md
+Sources/<agent>/handoffs/**/*.md
+```
+
+Do not inject explanatory text into raw evidence copies where it can break anchors or alter the source record:
+
+```text
+Sources/<agent>/daily/**/*.md
+Sources/<agent>/conversations/**/*.md
+.memory-sync/**/*.json
+```
+
+Preferred Chinese note style:
+
+```markdown
+> 文件说明：这是 Memory Sync 自动生成的记忆目录，用于在 Obsidian 中通过正向链接跳转到索引、记忆卡片、来源归档和个人知识页。
+```
+
+Preferred English note style:
+
+```markdown
+> File note: this Memory Sync page links the index, memory pages, source archives, and personal knowledge pages for Obsidian navigation.
+```
+
+Maintain `Dashboard/Memory Directory.md` as the Obsidian navigation directory. Keep these sections: Core Entries, Memory Pages, Cross-Agent Context, Source Archives, and Personal Knowledge. Keep the style consistent: use forward wikilinks for every navigation item, including important entry files and directory locations; do not fall back to plain path text. Because Obsidian does not reliably link to folders, directory locations should use lightweight `README.md` entry notes, for example `[[Memories/README.md|Memories/]]`, `[[Sources/openclaw/daily/README.md|Sources/openclaw/daily/]]`, and `[[Context/README.md|Context/]]`. Do not list every `Memories/memory_*.md`, daily file, or conversation transcript. Do not expose hidden machine-state folders as human navigation entries. Do not generate personal usage manuals as fixed skill outputs; personal notes can live in `Personal/` but are outside the skill's generated surfaces. The directory is a navigation surface, not the source of truth; the machine source of truth remains `.memory-sync/index/memory_index.json`.
 
 ## Git Version Management
 
