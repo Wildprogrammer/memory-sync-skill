@@ -78,7 +78,7 @@ Memory Sync has five layers:
 | Source | Reads OpenClaw daily files, OpenClaw distilled candidates, local conversation archives, agent handoffs, project captures, USER.md, and local agent configuration |
 | Obsidian | Provides the human-readable memory surface with Markdown pages, dashboards, source links, and reviewable profile output |
 | Index and Retention | Maintains the machine-readable memory index, S1-S4 stages, hit reinforcement, TTL expiry, and safe cleanup |
-| Shared Context | Publishes compact context packs under `_shared/context/` for Codex, Claude, OpenClaw, OpenCode, hermes-agent, and Qoder |
+| Shared Context | Publishes compact context packs under `Context/` for Codex, Claude, OpenClaw, OpenCode, hermes-agent, and Qoder |
 | Personal Knowledge | Preserves non-daily knowledge such as MEMORY.md, AGENTS.md, USER.md, and installed skill inventories under `Personal/Agent Knowledge/` |
 
 OpenClaw source files are treated as read-only. Memory Sync works on Obsidian copies and derived outputs.
@@ -152,7 +152,7 @@ Obsidian does not need to be running. The script writes Markdown and JSON files 
 
 - Added high-value process memories: success patterns, corrections, failure lessons, and user rules start at S2.
 - Added personal knowledge sync for non-daily agent knowledge such as MEMORY.md, USER.md, AGENTS.md, and TOOLS.md.
-- Added installed skill inventory sync under `_shared/agent_skills.json`, `_agents/<agent>/skills.json`, and `Personal/Agent Knowledge/Agent Skills.md`.
+- Added installed skill inventory sync under `.memory-sync/shared/agent_skills.json`, `.memory-sync/agents/<agent>/skills.json`, and `Personal/Agent Knowledge/Agent Skills.md`.
 - Added operating contracts for OpenClaw and hermes-agent context exports.
 - Added agent-assisted review mode: the current agent reviews candidate memories, while scripts prepare evidence and apply structured decisions.
 - Added readable conversation archives for Codex, Claude, OpenClaw, and Hermes local logs; archived conversations enter review before becoming memories.
@@ -162,7 +162,7 @@ Obsidian does not need to be running. The script writes Markdown and JSON files 
 
 - 新增高价值过程记忆识别：成功步骤、纠正步骤、失败教训、用户约定直接从 S2 起步。
 - 新增非每日长期知识同步：同步 MEMORY.md、USER.md、AGENTS.md、TOOLS.md 到 `Personal/Agent Knowledge/`。
-- 新增已安装 skill 清单同步：输出到 `_shared/agent_skills.json`、`_agents/<agent>/skills.json` 和 `Personal/Agent Knowledge/Agent Skills.md`。
+- 新增已安装 skill 清单同步：输出到 `.memory-sync/shared/agent_skills.json`、`.memory-sync/agents/<agent>/skills.json` 和 `Personal/Agent Knowledge/Agent Skills.md`。
 - 为 OpenClaw 和 hermes-agent 上下文加入 operating contract，强化规则读取、冲突反馈和安全边界。
 - 新增 agent-assisted review 模式：当前 agent 负责审核候选记忆，脚本负责准备证据和结构化落库。
 - 新增 Codex、Claude、OpenClaw、Hermes 本地对话归档能力；归档对话先进入 review，再决定是否晋升为记忆。

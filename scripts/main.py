@@ -8,9 +8,11 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
+import time
 from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -27,13 +29,39 @@ if sys.platform == "win32":
 
 ROOT = Path(__file__).resolve().parents[1]
 INDEX_META = "_meta"
-INDEX_NAME = "openclaw_memory_index.json"
+INDEX_NAME = "memory_index.json"
+LEGACY_INDEX_NAME = "openclaw_memory_index.json"
 PROFILE_NAME = "user_profile.json"
-OBSIDIAN_INDEX_FILE = "03-Reference/OpenClaw\u8bb0\u5fc6\u7d22\u5f15.md"
-PROFILE_MD_FILE = "03-Reference/User\u753b\u50cf.md"
-MEMORY_DASHBOARD_FILE = "03-Reference/Memory Dashboard.md"
-MEMORY_PAGES_DIR = "03-Reference/Memories"
-CONTEXT_DIR = "_context"
+MACHINE_DIR = ".memory-sync"
+STATE_INDEX_DIR = f"{MACHINE_DIR}/index"
+STATE_AGENTS_DIR = f"{MACHINE_DIR}/agents"
+STATE_SHARED_DIR = f"{MACHINE_DIR}/shared"
+STATE_REVIEW_DIR = f"{MACHINE_DIR}/review"
+STATE_CACHE_DIR = f"{MACHINE_DIR}/cache"
+PATH_MAP_FILE = f"{MACHINE_DIR}/path-map.json"
+DASHBOARD_DIR = "Dashboard"
+SOURCES_DIR = "Sources"
+OBSIDIAN_INDEX_FILE = f"{DASHBOARD_DIR}/Memory Index.md"
+PROFILE_MD_FILE = f"{DASHBOARD_DIR}/User Profile.md"
+MEMORY_DASHBOARD_FILE = f"{DASHBOARD_DIR}/Memory Dashboard.md"
+MEMORY_PAGES_DIR = "Memories"
+RETIRED_DASHBOARD_FILES = (
+    f"{DASHBOARD_DIR}/Index Layers.md",
+    f"{DASHBOARD_DIR}/Open Source Boundary.md",
+    f"{DASHBOARD_DIR}/OpenClaw\u8bb0\u5fc6\u7d22\u5f15.md",
+    f"{DASHBOARD_DIR}/\u5168\u5c40\u8bb0\u5fc6\u7d22\u5f15.md",
+)
+RETIRED_LAYOUT_DIRS = (
+    "02-Lessons",
+    "03-Reference",
+    "_agents",
+    "_index",
+    "_review",
+    "_shared",
+    "_context",
+)
+LEGACY_CONTEXT_DIR = "_context"
+CONTEXT_DIR = LEGACY_CONTEXT_DIR
 CONTEXT_JSON = f"{CONTEXT_DIR}/agent_context.json"
 ADAPTER_NAMES = ("codex", "claude", "openclaw", "opencode", "hermes-agent", "qoder")
 AGENT_RULE_ENTRYPOINTS = {
@@ -41,42 +69,45 @@ AGENT_RULE_ENTRYPOINTS = {
     "codex": ["project AGENTS.md", "~/.codex/AGENTS.md"],
     "claude": ["project CLAUDE.md", "project .claude/CLAUDE.md", "~/.claude/CLAUDE.md"],
     "opencode": ["project AGENTS.md", "~/.config/opencode/AGENTS.md", "CLAUDE.md compatibility file when used"],
-    "hermes-agent": ["configured system prompt or rule file", "_shared/context/hermes-agent.md handoff when no persistent rule file exists"],
-    "qoder": ["Qoder user/project rules when configured", "_shared/context/qoder.md handoff when no persistent rule file exists"],
+    "hermes-agent": ["configured system prompt or rule file", "Context/hermes-agent.md handoff when no persistent rule file exists"],
+    "qoder": ["Qoder user/project rules when configured", "Context/qoder.md handoff when no persistent rule file exists"],
 }
-AGENTS_DIR = "_agents"
-SHARED_DIR = "_shared"
-SHARED_CONTEXT_DIR = f"{SHARED_DIR}/context"
-SHARED_MEMORY_INDEX = f"{SHARED_DIR}/shared_memory_index.json"
-SHARED_PROFILE_JSON = f"{SHARED_DIR}/user_profile.json"
-SHARED_CONTEXT_JSON = f"{SHARED_DIR}/agent_context.json"
-PERMANENT_DIR = "03-Reference/OpenClaw-Permanent"
+AGENTS_DIR = SOURCES_DIR
+SHARED_DIR = STATE_SHARED_DIR
+SHARED_CONTEXT_DIR = "Context"
+SHARED_MEMORY_INDEX = f"{STATE_SHARED_DIR}/shared_memory_index.json"
+SHARED_PROFILE_JSON = f"{STATE_SHARED_DIR}/user_profile.json"
+SHARED_CONTEXT_JSON = f"{STATE_SHARED_DIR}/agent_context.json"
+PERMANENT_DIR = "Memories/Permanent"
 PERSONAL_KNOWLEDGE_DIR = "Personal/Agent Knowledge"
 AGENT_SKILLS_MD_FILE = f"{PERSONAL_KNOWLEDGE_DIR}/Agent Skills.md"
-REFERENCE_AGENT_SKILLS_MD_FILE = "03-Reference/Agent Skills.md"
-SHARED_AGENT_SKILLS_JSON = f"{SHARED_DIR}/agent_skills.json"
+REFERENCE_AGENT_SKILLS_MD_FILE = f"{DASHBOARD_DIR}/Agent Skills.md"
+SHARED_AGENT_SKILLS_JSON = f"{STATE_SHARED_DIR}/agent_skills.json"
 DAILY_DIR = "memory"
-VAULT_DAILY_DIR = "02-Lessons/OpenClaw-Daily"
-REVIEW_DIR = "_review/memory-sync"
+VAULT_DAILY_DIR = "Sources/openclaw/daily"
+REVIEW_DIR = STATE_REVIEW_DIR
 REVIEW_PACK_NAME = "latest-pack.json"
 STAGES = ("S1", "S2", "S3", "S4")
 PREVIOUS_STAGE = {"S2": "S1", "S3": "S2"}
 RESERVED_INDEX_KEYS = {INDEX_META, "memories", "daily_refs", "processed_dates", "version", "updated_at"}
-AGENT_DAILY_PATTERN = re.compile(rf"^{re.escape(AGENTS_DIR)}/[^/]+/daily/")
-AGENT_EVIDENCE_PATTERN = re.compile(rf"^{re.escape(AGENTS_DIR)}/[^/]+/evidence/")
-AGENT_CONVERSATION_PATTERN = re.compile(rf"^{re.escape(AGENTS_DIR)}/[^/]+/conversations/")
-AGENT_SUMMARY_PATTERN = re.compile(rf"^{re.escape(AGENTS_DIR)}/[^/]+/summaries/")
+AGENT_DAILY_PATTERN = re.compile(rf"^{re.escape(SOURCES_DIR)}/[^/]+/(daily|handoffs)/")
+AGENT_EVIDENCE_PATTERN = re.compile(rf"^{re.escape(SOURCES_DIR)}/[^/]+/evidence/")
+AGENT_CONVERSATION_PATTERN = re.compile(rf"^{re.escape(SOURCES_DIR)}/[^/]+/conversations/")
+AGENT_SUMMARY_PATTERN = re.compile(rf"^{re.escape(SOURCES_DIR)}/[^/]+/(summaries|conversation-summaries)/")
 DERIVED_SOURCE_PREFIXES = (
-    "_index/",
-    f"{SHARED_DIR}/",
-    f"{AGENTS_DIR}/",
+    f"{STATE_INDEX_DIR}/",
+    f"{STATE_SHARED_DIR}/",
+    f"{STATE_AGENTS_DIR}/",
     f"{MEMORY_PAGES_DIR}/",
     CONTEXT_DIR + "/",
+    SHARED_CONTEXT_DIR + "/",
 )
+INDEX_REFERENCE_KEYS = {"path", "summary_path", "transcript_path", "source_file", "source", "file", "original_context_file"}
 ALLOWED_SOURCE_PREFIXES = (
     f"{VAULT_DAILY_DIR}/",
     f"{PERMANENT_DIR}/",
     f"{PERSONAL_KNOWLEDGE_DIR}/",
+    f"{SOURCES_DIR}/",
 )
 LEGACY_SOURCE_MARKERS = ("memory/.dreams/session-corpus/", "main/sessions/", ".jsonl")
 MIN_COMPACT_LENGTH = 80
@@ -605,7 +636,7 @@ def env_bool(name: str, default: bool) -> bool:
 
 CONFIG = {
     "OPENCLAW_WORKSPACE": os.environ.get("OPENCLAW_WORKSPACE", "~/.openclaw/workspace"),
-    "VAULT_PATH": os.environ.get("OBSIDIAN_VAULT_PATH", "~/Documents/obsidian/belongme"),
+    "VAULT_PATH": os.environ.get("OBSIDIAN_VAULT_PATH", "~/Documents/obsidian/vault"),
     "HIT_COOLDOWN_HOURS": env_int("HIT_COOLDOWN_HOURS", 24),
     "S1_TTL_MIN_DAYS": env_int("S1_TTL_MIN_DAYS", 3),
     "S1_TTL_MAX_DAYS": env_int("S1_TTL_MAX_DAYS", 10),
@@ -770,6 +801,19 @@ def keyword_set(memory: dict[str, Any]) -> set[str]:
     return {normalize_keyword(str(item)) for item in source if not is_generic_keyword(str(item))}
 
 
+def is_conversation_memory(memory: dict[str, Any]) -> bool:
+    origin = str(memory.get("candidate_origin", ""))
+    return memory.get("memory_lane") == "conversation" or origin.endswith("-conversation-archive")
+
+
+def same_file_different_anchor(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    left_file = normalize_rel_path(left.get("source_file"))
+    right_file = normalize_rel_path(right.get("source_file"))
+    if not left_file or left_file != right_file:
+        return False
+    return str(left.get("source_anchor", "")).strip() != str(right.get("source_anchor", "")).strip()
+
+
 def normalize_keyword(value: str) -> str:
     value = value.strip().strip("`*_#[]()<>:：，,。.!！?？;；")
     return re.sub(r"\s+", " ", value).lower()
@@ -778,6 +822,44 @@ def normalize_keyword(value: str) -> str:
 def is_legacy_source(value: str | None) -> bool:
     source = str(value or "").replace("\\", "/").lower()
     return any(marker in source for marker in LEGACY_SOURCE_MARKERS)
+
+
+def normalize_rel_path(value: str | None) -> str:
+    return str(value or "").replace("\\", "/").strip("/")
+
+
+def legacy_rel_path_candidates(value: str | None) -> list[str]:
+    source = normalize_rel_path(value)
+    if not source:
+        return []
+    candidates = [source]
+    prefix_map = [
+        ("02-Lessons/OpenClaw-Daily/", f"{VAULT_DAILY_DIR}/"),
+        ("03-Reference/OpenClaw-Permanent/", f"{PERMANENT_DIR}/"),
+        ("03-Reference/Memories/", f"{MEMORY_PAGES_DIR}/"),
+        ("03-Reference/", f"{DASHBOARD_DIR}/"),
+        ("_index/", f"{STATE_INDEX_DIR}/"),
+        ("_shared/context/", f"{SHARED_CONTEXT_DIR}/"),
+        ("_shared/", f"{STATE_SHARED_DIR}/"),
+        ("_review/memory-sync/", f"{STATE_REVIEW_DIR}/"),
+    ]
+    for old, new in prefix_map:
+        if source.startswith(old):
+            candidates.append(new + source[len(old):])
+    match = re.match(r"^_agents/([^/]+)/(daily|handoffs|evidence|conversations|permanent)/(.+)$", source)
+    if match:
+        agent, lane, rest = match.groups()
+        candidates.append(f"{SOURCES_DIR}/{agent}/{lane}/{rest}")
+    match = re.match(r"^_agents/([^/]+)/(summaries|index\.json|skills\.json|skills\.md)(?:/(.+))?$", source)
+    if match:
+        agent, lane, rest = match.groups()
+        suffix = f"{lane}/{rest}" if rest else lane
+        candidates.append(f"{STATE_AGENTS_DIR}/{agent}/{suffix}")
+    deduped: list[str] = []
+    for candidate in candidates:
+        if candidate and candidate not in deduped:
+            deduped.append(candidate)
+    return deduped
 
 
 def source_type_for(value: str | None) -> str:
@@ -798,15 +880,37 @@ def source_type_for(value: str | None) -> str:
         return "agent_summary_derived"
     if source.startswith(f"{SHARED_DIR}/"):
         return "shared_derived"
-    if source.startswith("_index/"):
+    if source.startswith(f"{STATE_AGENTS_DIR}/"):
+        return "agent_summary_derived"
+    if source.startswith(f"{STATE_INDEX_DIR}/") or source.startswith("_index/"):
         return "index_derived"
     if source.startswith(f"{MEMORY_PAGES_DIR}/"):
         return "memory_page_derived"
-    if source.startswith(f"{CONTEXT_DIR}/"):
+    if source.startswith(f"{CONTEXT_DIR}/") or source.startswith(f"{SHARED_CONTEXT_DIR}/"):
         return "context_derived"
+    for translated in legacy_rel_path_candidates(source)[1:]:
+        translated_type = source_type_for(translated)
+        if translated_type != "unknown":
+            return translated_type
     if is_legacy_source(source):
         return "legacy_session"
     return "unknown"
+
+
+def source_agent_for(value: str | None) -> str | None:
+    source = normalize_rel_path(value)
+    match = re.match(rf"^{re.escape(SOURCES_DIR)}/([^/]+)/", source)
+    if match:
+        return match.group(1)
+    if source.startswith(f"{VAULT_DAILY_DIR}/") or source.startswith("02-Lessons/OpenClaw-Daily/"):
+        return "openclaw"
+    if source.startswith(f"{PERMANENT_DIR}/"):
+        return "shared"
+    for translated in legacy_rel_path_candidates(source)[1:]:
+        agent = source_agent_for(translated)
+        if agent:
+            return agent
+    return None
 
 
 def is_allowed_memory_source(value: str | None) -> bool:
@@ -1071,6 +1175,13 @@ def split_conversation_turns(content: str) -> list[tuple[str, str, str]]:
         end = start + len(body_lines) - 1
         result.append((title, body, f"line {start}-{end}"))
     return result
+
+
+def conversation_candidate_text(body: str) -> str:
+    text = re.sub(r"<details>.*?</details>", "", body, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"_Source line:\s*[^_\n]+_", "", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 
 def title_from_conversation_turn(agent: str, turn_title: str, body: str) -> str:
@@ -1483,11 +1594,24 @@ def keyword_diagnostics(text: str) -> tuple[list[str], list[str]]:
 class MemoryStore:
     def __init__(self, vault_path: Path):
         self.vault_path = vault_path
-        self.index_path = vault_path / "_index" / INDEX_NAME
+        self.index_path = vault_path / STATE_INDEX_DIR / INDEX_NAME
+        self.legacy_index_paths = [
+            vault_path / STATE_INDEX_DIR / LEGACY_INDEX_NAME,
+            vault_path / "_index" / LEGACY_INDEX_NAME,
+            vault_path / "_index" / INDEX_NAME,
+        ]
+        self.loaded_from_legacy_index = False
         self.data = self.load()
 
     def load(self) -> dict[str, Any]:
-        if not self.index_path.exists():
+        load_path = self.index_path
+        if not load_path.exists():
+            for candidate in self.legacy_index_paths:
+                if candidate.exists():
+                    load_path = candidate
+                    self.loaded_from_legacy_index = True
+                    break
+        if not load_path.exists():
             return {
                 INDEX_META: {
                     "schema": "openclaw-memory-index",
@@ -1497,9 +1621,9 @@ class MemoryStore:
                 }
             }
         try:
-            data = json.loads(self.index_path.read_text(encoding="utf-8"))
+            data = json.loads(load_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
-            raise ValueError(f"Index file is invalid JSON: {self.index_path} ({exc})") from exc
+            raise ValueError(f"Index file is invalid JSON: {load_path} ({exc})") from exc
         if INDEX_META not in data:
             data[INDEX_META] = {"schema": "openclaw-memory-index", "processed_files": {}}
         data[INDEX_META].setdefault("processed_files", {})
@@ -1557,6 +1681,7 @@ class MemoryStore:
     @staticmethod
     def ensure_keyword_profile(memory: dict[str, Any]) -> None:
         memory.setdefault("source_type", source_type_for(memory.get("source_file")))
+        memory.setdefault("source_agent", source_agent_for(memory.get("source_file")) or "openclaw")
         memory.setdefault("quality_score", 1.0)
         memory.setdefault("filtered_reason", None)
         if memory.get("strong_keywords"):
@@ -1579,6 +1704,7 @@ class MemoryStore:
         memory["keywords"] = profile["keywords"]
         memory["strong_keywords"] = profile["strong_keywords"]
         memory["source_type"] = source_type_for(memory.get("source_file"))
+        memory["source_agent"] = memory.get("source_agent") or source_agent_for(memory.get("source_file")) or "openclaw"
         memory.setdefault("quality_score", 1.0)
         memory.setdefault("filtered_reason", None)
 
@@ -1602,6 +1728,10 @@ class MemoryStore:
         tmp = self.index_path.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(self.data, ensure_ascii=False, indent=2), encoding="utf-8")
         os.replace(tmp, self.index_path)
+        for old_path in self.legacy_index_paths:
+            if old_path.exists() and old_path != self.index_path:
+                old_path.unlink()
+        self.loaded_from_legacy_index = False
 
     def next_id(self) -> str:
         max_id = 0
@@ -1642,10 +1772,10 @@ class MemoryStore:
         refs: set[str] = set()
         for memory in self.memories().values():
             if memory.get("source_file"):
-                refs.add(str(memory["source_file"]).replace("\\", "/"))
+                refs.update(legacy_rel_path_candidates(str(memory["source_file"])))
             for source in memory.get("sources", []):
                 if source.get("file"):
-                    refs.add(str(source["file"]).replace("\\", "/"))
+                    refs.update(legacy_rel_path_candidates(str(source["file"])))
         return refs
 
 
@@ -1669,6 +1799,14 @@ class MemorySync:
             return path.relative_to(self.vault_path).as_posix()
         except ValueError:
             return path.as_posix()
+
+    def resolve_vault_rel(self, rel: str) -> Path:
+        candidates = legacy_rel_path_candidates(rel)
+        for candidate in candidates:
+            path = self.vault_path / candidate
+            if path.exists():
+                return path
+        return self.vault_path / (candidates[0] if candidates else normalize_rel_path(rel))
 
     def vault_daily_path(self, original_path: Path) -> Path:
         return self.vault_path / VAULT_DAILY_DIR / original_path.name
@@ -1762,6 +1900,46 @@ class MemorySync:
             "base_memory": memory,
         }
 
+    def dedupe_review_candidates(self, candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        deduped: list[dict[str, Any]] = []
+        seen_keys: set[str] = set()
+        seen_ids: set[str] = set()
+        for item in candidates:
+            base = item.get("base_memory") if isinstance(item.get("base_memory"), dict) else {}
+            key = str(base.get("candidate_uid") or item.get("candidate_id") or "").strip()
+            candidate_id = str(item.get("candidate_id") or "").strip()
+            if not key:
+                key = hashlib.sha1(
+                    f"{item.get('source_file')}|{item.get('source_anchor')}|{item.get('text_hash')}".encode(
+                        "utf-8", errors="ignore"
+                    )
+                ).hexdigest()
+            if key in seen_keys or (candidate_id and candidate_id in seen_ids):
+                continue
+            seen_keys.add(key)
+            if candidate_id:
+                seen_ids.add(candidate_id)
+            deduped.append(item)
+        return deduped
+
+    def dedupe_memory_candidates(self, candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        deduped: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for memory in candidates:
+            key = str(memory.get("candidate_uid") or "").strip()
+            if not key:
+                key = candidate_uid(
+                    str(memory.get("candidate_origin") or "memory-candidate"),
+                    f"{memory.get('source_file', '')}:{memory.get('source_anchor', '')}",
+                    str(memory.get("summary") or memory.get("excerpt") or memory.get("title") or ""),
+                )
+                memory["candidate_uid"] = key
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(memory)
+        return deduped
+
     def compact_existing_memories(self) -> list[dict[str, Any]]:
         rows = []
         for memory_id, memory in self.store.memories().items():
@@ -1805,9 +1983,10 @@ class MemorySync:
             processed_files[rel] = digest
             for title, body, anchor in split_conversation_turns(text):
                 coverage["conversation_segments_seen"] += 1
-                reason = noise_reason_for_text(body)
-                high_value_reason = high_value_reason_for_text(body)
-                compact = re.sub(r"\s+", "", body)
+                candidate_text = conversation_candidate_text(body)
+                reason = noise_reason_for_text(candidate_text)
+                high_value_reason = high_value_reason_for_text(candidate_text)
+                compact = re.sub(r"\s+", "", candidate_text)
                 if (reason and not high_value_reason) or len(compact) < 80:
                     skipped.append(
                         {
@@ -1819,11 +1998,11 @@ class MemorySync:
                         }
                     )
                     continue
-                memory = self.build_memory(title, body, rel, anchor, rel)
-                memory["title"] = title_from_conversation_turn(agent, title, body)
+                memory = self.build_memory(title, candidate_text, rel, anchor, rel)
+                memory["title"] = title_from_conversation_turn(agent, title, candidate_text)
                 memory["source_agent"] = agent
                 memory["candidate_origin"] = f"{agent}-conversation-archive"
-                memory["candidate_uid"] = candidate_uid(memory["candidate_origin"], f"{rel}:{anchor}", body)
+                memory["candidate_uid"] = candidate_uid(memory["candidate_origin"], f"{rel}:{anchor}", candidate_text)
                 memory["memory_lane"] = "conversation"
                 memory["context_storage_policy"] = "archive_then_review"
                 memory["original_context_file"] = rel
@@ -1840,7 +2019,7 @@ class MemorySync:
                     )
                     continue
                 coverage["conversation_candidates"] += 1
-                candidates.append(self.review_candidate_from_memory(memory, body, "agent_conversation", agent))
+                candidates.append(self.review_candidate_from_memory(memory, candidate_text, "agent_conversation", agent))
         return candidates, processed_files, skipped, coverage
 
     def build_review_pack(self) -> dict[str, Any]:
@@ -1855,11 +2034,13 @@ class MemorySync:
         copied_daily_files: list[str] = []
         skipped: list[dict[str, str]] = []
         coverage: Counter[str] = Counter()
-        existing_uids = {
-            str(memory.get("candidate_uid"))
-            for memory in self.store.memories().values()
-            if memory.get("candidate_uid")
-        }
+        existing_uids: set[str] = set()
+        for memory in self.store.memories().values():
+            if memory.get("candidate_uid"):
+                existing_uids.add(str(memory.get("candidate_uid")))
+            for uid in memory.get("merged_candidate_uids", []) or []:
+                if uid:
+                    existing_uids.add(str(uid))
 
         for path in sorted(memory_dir.glob("*.md")):
             coverage["daily_files_scanned"] += 1
@@ -1921,6 +2102,7 @@ class MemorySync:
             session_curated_count = len(session_curated)
             distilled.extend(session_curated)
             distilled.extend(self.collect_recall_candidates())
+            distilled = self.dedupe_memory_candidates(distilled)
             for memory in distilled:
                 body = str(memory.get("excerpt") or memory.get("summary") or memory.get("title") or "")
                 if not body:
@@ -1946,6 +2128,9 @@ class MemorySync:
         processed_files.update(conversation_processed)
         skipped.extend(conversation_skipped)
         coverage.update(conversation_coverage)
+        raw_candidate_count = len(candidates)
+        candidates = self.dedupe_review_candidates(candidates)
+        coverage["duplicate_candidates_removed"] = raw_candidate_count - len(candidates)
         coverage["candidate_count"] = len(candidates)
         coverage["skipped_count"] = len(skipped)
 
@@ -2291,6 +2476,7 @@ class MemorySync:
             "keywords": keyword_profile["keywords"],
             "strong_keywords": keyword_profile["strong_keywords"],
             "stage": stage,
+            "source_agent": source_agent_for(source_file) or "openclaw",
             "source_type": source_type_for(source_file),
             "quality_score": 1.0,
             "filtered_reason": None,
@@ -2403,6 +2589,8 @@ class MemorySync:
         candidate_title = normalized_memory_title(str(candidate.get("title", "")))
         best: tuple[str, dict[str, Any], float] | None = None
         for memory_id, memory in self.store.memories().items():
+            if is_conversation_memory(candidate) and is_conversation_memory(memory) and same_file_different_anchor(candidate, memory):
+                continue
             memory_title = normalized_memory_title(str(memory.get("title", "")))
             score = jaccard(candidate_keywords, keyword_set(memory))
             if candidate_title and candidate_title == memory_title and not is_low_signal_profile_label(candidate_title):
@@ -2426,9 +2614,13 @@ class MemorySync:
             "created_at": now_iso(),
         }
         sources = existing.setdefault("sources", [])
-        if source["file"] not in {item.get("file") for item in sources}:
+        if (source["file"], source["anchor"]) not in {(item.get("file"), item.get("anchor")) for item in sources}:
             sources.append(source)
 
+        if candidate.get("candidate_uid"):
+            existing["merged_candidate_uids"] = sorted(
+                set(existing.get("merged_candidate_uids", []) + [str(candidate["candidate_uid"])])
+            )
         existing["merged_from"] = sorted(set(existing.get("merged_from", []) + [candidate["source_file"]]))
         existing["keywords"] = list(dict.fromkeys(existing.get("keywords", []) + candidate.get("keywords", [])))[:18]
         existing["strong_keywords"] = list(
@@ -2459,6 +2651,8 @@ class MemorySync:
             "openclaw_grounded_count",
             "openclaw_light_hits",
             "openclaw_rem_hits",
+            "source_agent",
+            "source_type",
                 "openclaw_concept_tags",
                 "openclaw_confidence",
                 "context_storage_policy",
@@ -2482,9 +2676,8 @@ class MemorySync:
         uid = candidate.get("candidate_uid")
         if uid:
             for memory_id, existing in self.store.memories().items():
-                if existing.get("candidate_uid") == uid:
-                    self.merge_memory(memory_id, existing, candidate, 1.0)
-                    return memory_id, "merged"
+                if existing.get("candidate_uid") == uid or str(uid) in set(existing.get("merged_candidate_uids", [])):
+                    return memory_id, "unchanged"
         duplicate = self.find_duplicate(candidate)
         if duplicate:
             memory_id, existing, score = duplicate
@@ -2930,8 +3123,11 @@ class MemorySync:
         candidates.extend(self.collect_dream_candidates("deep", "openclaw-deep"))
         candidates.extend(self.collect_dream_candidates("rem", "openclaw-rem"))
         candidates.extend(self.collect_recall_candidates())
+        raw_candidate_count = len(candidates)
+        candidates = self.dedupe_memory_candidates(candidates)
 
         stats["candidates"] = len(candidates)
+        stats["duplicate_candidates_removed"] = raw_candidate_count - len(candidates)
         for candidate in candidates:
             _memory_id, action = self.add_or_merge(candidate)
             stats[action] += 1
@@ -2942,7 +3138,8 @@ class MemorySync:
             self.store.data[INDEX_META]["openclaw_distilled_imported_merged"] = stats["merged"]
         self.log(
             "OpenClaw distilled import: "
-            f"candidates={stats['candidates']}, added={stats['added']}, merged={stats['merged']}"
+            f"candidates={stats['candidates']}, added={stats['added']}, merged={stats['merged']}, "
+            f"unchanged={stats['unchanged']}, deduped={stats['duplicate_candidates_removed']}"
         )
         return stats
 
@@ -3007,17 +3204,75 @@ class MemorySync:
         return 0
 
     def clean_unrelated_daily_files(self, candidates: list[Path]) -> bool:
-        referenced = self.store.referenced_files()
+        indexed_refs = self.indexed_source_refs()
         changed = False
         for path in candidates:
             rel = self.vault_rel(path)
-            if rel in referenced:
+            if rel in indexed_refs:
                 continue
             if path.exists():
                 path.unlink()
                 changed = True
-            self.log(f"REMOVED unrelated vault daily copy reason=no_indexed_memory: {rel}")
+            self.log(f"REMOVED unrelated vault daily copy reason=no_index_relationship: {rel}")
         return changed
+
+    def clean_unindexed_source_archives(self) -> bool:
+        if self.review_pack_path().exists():
+            self.log("SKIP source archive cleanup while review pack is pending")
+            return False
+        source_root = self.vault_path / SOURCES_DIR
+        if not source_root.exists():
+            return False
+        indexed_refs = self.indexed_source_refs()
+        changed = False
+        for path in sorted(source_root.rglob("*")):
+            if not path.is_file():
+                continue
+            rel = self.vault_rel(path)
+            if rel in indexed_refs:
+                continue
+            path.unlink()
+            changed = True
+            self.log(f"REMOVED unindexed source archive: {rel}")
+        for path in sorted([item for item in source_root.rglob("*") if item.is_dir()], key=lambda item: len(item.parts), reverse=True):
+            try:
+                path.rmdir()
+            except OSError:
+                pass
+        return changed
+
+    def indexed_source_refs(self) -> set[str]:
+        refs = set(self.store.referenced_files())
+        roots = [
+            self.vault_path / STATE_AGENTS_DIR,
+            self.vault_path / STATE_SHARED_DIR,
+        ]
+        for root in roots:
+            if not root.exists():
+                continue
+            for path in root.rglob("*.json"):
+                try:
+                    payload = json.loads(path.read_text(encoding="utf-8"))
+                except json.JSONDecodeError:
+                    continue
+                self.collect_index_source_refs(payload, refs)
+        return refs
+
+    def collect_index_source_refs(self, value: Any, refs: set[str], key: str | None = None) -> None:
+        if isinstance(value, dict):
+            for child_key, child_value in value.items():
+                self.collect_index_source_refs(child_value, refs, str(child_key))
+            return
+        if isinstance(value, list):
+            for item in value:
+                self.collect_index_source_refs(item, refs, key)
+            return
+        if key not in INDEX_REFERENCE_KEYS or not isinstance(value, str):
+            return
+        for candidate in legacy_rel_path_candidates(value):
+            rel = normalize_rel_path(candidate)
+            if rel.startswith(f"{SOURCES_DIR}/") or rel.startswith(f"{PERSONAL_KNOWLEDGE_DIR}/"):
+                refs.add(rel)
 
     def apply_expiry(self) -> bool:
         now = datetime.now()
@@ -3278,9 +3533,9 @@ class MemorySync:
         counts = Counter(memory.get("stage", "S1") for memory in memories.values())
         updated_at = self.store.data.get(INDEX_META, {}).get("updated_at") or now_iso()
         lines = [
-            "# OpenClaw 记忆索引",
+            "# Memory Index / 全局记忆索引",
             "",
-            "> 自动生成文件。脚本使用 `_index/openclaw_memory_index.json` 作为机器真相源，本文件作为 Obsidian 可读入口。",
+            f"> 自动生成文件。`{STATE_INDEX_DIR}/{INDEX_NAME}` 是机器真相源，本文件是 Obsidian 可读入口。",
             "",
             f"- 更新时间：{updated_at}",
             f"- 记忆总数：{len(memories)}",
@@ -3311,7 +3566,7 @@ class MemorySync:
                 lines.append(f"- 阶段：{memory.get('stage', 'S1')}")
                 lines.append(f"- 有效命中：{memory.get('effective_hit_count', 0)}")
                 if memory.get("candidate_origin"):
-                    lines.append(f"- OpenClaw candidate：{memory.get('candidate_origin')}")
+                    lines.append(f"- Candidate origin：{memory.get('candidate_origin')}")
                 if memory.get("openclaw_score") is not None:
                     lines.append(f"- OpenClaw score：{memory.get('openclaw_score')}")
                 if memory.get("openclaw_confidence") is not None:
@@ -3391,8 +3646,21 @@ class MemorySync:
         source = str(memory.get("source_file", ""))
         if source:
             lines.append(f"- Source: [[{source}]]")
+            readable = source.replace("/conversations/", "/conversation-summaries/")
+            if readable != source and (self.vault_path / readable).exists():
+                lines.append(f"- Readable transcript: [[{readable}]]")
         if memory.get("permanent_file"):
             lines.append(f"- Permanent: [[{memory['permanent_file']}]]")
+        source_items = memory.get("sources") or []
+        if isinstance(source_items, list) and len(source_items) > 1:
+            lines.extend(["", "## Source Anchors", ""])
+            for item in source_items[:20]:
+                if not isinstance(item, dict):
+                    continue
+                item_file = str(item.get("file", ""))
+                item_anchor = str(item.get("anchor", ""))
+                if item_file:
+                    lines.append(f"- [[{item_file}]] {item_anchor}".rstrip())
         if keywords:
             lines.extend(["", "## Keywords", "", ", ".join(str(item) for item in keywords[:12])])
         excerpt = str(memory.get("evidence_text") or memory.get("excerpt", "")).strip()
@@ -3404,6 +3672,8 @@ class MemorySync:
         page_dir = self.vault_path / MEMORY_PAGES_DIR
         expected: set[Path] = set()
         for memory_id, memory in self.store.memories().items():
+            if str(memory.get("stage", "S1")) == "S1":
+                continue
             rel = self.memory_page_rel(memory_id, memory)
             path = self.vault_path / rel
             expected.add(path.resolve())
@@ -3437,8 +3707,8 @@ class MemorySync:
             "",
             f"- [[{OBSIDIAN_INDEX_FILE}]]",
             f"- [[{PROFILE_MD_FILE}]]",
-            f"- [[_shared/context/agent_brief.md]]",
-            f"- [[_context/agent_brief.md]]",
+            f"- [[{SHARED_CONTEXT_DIR}/agent_brief.md]]",
+            f"- Machine state: `{MACHINE_DIR}`",
             "",
         ]
         if profile_brief:
@@ -3455,20 +3725,51 @@ class MemorySync:
                 lines.append(f"  - {compact_text(str(memory.get('summary')), 140)}")
         lines.extend(["", "## Agent Stores", ""])
         for agent in ADAPTER_NAMES:
-            lines.append(f"- {agent}: [[{AGENTS_DIR}/{agent}/index.json]]")
+            lines.append(f"- {agent}: [[{STATE_AGENTS_DIR}/{agent}/index.json]]")
         lines.extend(["", "## Optional Dataview", "", "```dataview", f'TABLE stage, source_agent, expire_at FROM "{MEMORY_PAGES_DIR}" SORT stage DESC', "```", ""])
         self.write_text_atomic(self.vault_path / MEMORY_DASHBOARD_FILE, "\n".join(lines).rstrip() + "\n")
+
+    def cleanup_retired_dashboard_pages(self) -> None:
+        for rel in RETIRED_DASHBOARD_FILES:
+            path = self.vault_path / rel
+            if path.exists() and path.is_file():
+                path.unlink()
+
+    def cleanup_retired_layout_dirs(self) -> None:
+        vault_root = self.vault_path.resolve()
+        for rel in RETIRED_LAYOUT_DIRS:
+            if rel == CONTEXT_DIR and CONFIG["LEGACY_CONTEXT_ENABLED"]:
+                continue
+            path = self.vault_path / rel
+            if not path.exists():
+                continue
+            target = path.resolve()
+            try:
+                target.relative_to(vault_root)
+            except ValueError as exc:
+                raise RuntimeError(f"Refusing to clean path outside vault: {target}") from exc
+            if target == vault_root:
+                raise RuntimeError(f"Refusing to clean vault root: {target}")
+            if path.is_dir():
+                shutil.rmtree(path)
+            elif path.is_file():
+                path.unlink()
 
     def write_obsidian_surfaces(self, profile: dict[str, Any] | None = None, context: dict[str, Any] | None = None) -> None:
         self.write_obsidian_index()
         self.write_obsidian_memory_pages()
         self.write_memory_dashboard(profile=profile, context=context)
+        self.cleanup_retired_dashboard_pages()
+        self.cleanup_retired_layout_dirs()
 
     def memory_agent(self, memory: dict[str, Any]) -> str:
         return str(memory.get("source_agent") or "openclaw")
 
     def agent_dir(self, agent: str) -> Path:
         return self.vault_path / AGENTS_DIR / agent
+
+    def agent_state_dir(self, agent: str) -> Path:
+        return self.vault_path / STATE_AGENTS_DIR / agent
 
     def agent_memories(self, agent: str) -> dict[str, dict[str, Any]]:
         return {
@@ -3481,13 +3782,63 @@ class MemorySync:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(path.suffix + ".tmp")
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(tmp, path)
+        self.replace_file_with_retry(tmp, path)
 
     def write_text_atomic(self, path: Path, text: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(path.suffix + ".tmp")
         tmp.write_text(text, encoding="utf-8")
-        os.replace(tmp, path)
+        self.replace_file_with_retry(tmp, path)
+
+    def replace_file_with_retry(self, tmp: Path, path: Path) -> None:
+        for attempt in range(8):
+            try:
+                os.replace(tmp, path)
+                return
+            except PermissionError:
+                if attempt == 7:
+                    raise
+                time.sleep(0.15 * (attempt + 1))
+
+    def write_path_map(self) -> None:
+        payload = {
+            "_meta": {
+                "schema": "memory-sync-path-map",
+                "generated_at": now_iso(),
+                "policy": "Direct writes use the new layout. Legacy paths are read-only aliases for old indexes and source links.",
+            },
+            "new_layout": {
+                "dashboard": DASHBOARD_DIR,
+                "sources": SOURCES_DIR,
+                "memories": MEMORY_PAGES_DIR,
+                "context": SHARED_CONTEXT_DIR,
+                "machine_state": MACHINE_DIR,
+                "machine_index": STATE_INDEX_DIR,
+                "machine_agents": STATE_AGENTS_DIR,
+                "machine_shared": STATE_SHARED_DIR,
+                "machine_review": STATE_REVIEW_DIR,
+                "personal_knowledge": PERSONAL_KNOWLEDGE_DIR,
+            },
+            "legacy_aliases": {
+                "02-Lessons/OpenClaw-Daily/": VAULT_DAILY_DIR + "/",
+                "03-Reference/OpenClaw-Permanent/": PERMANENT_DIR + "/",
+                "03-Reference/Memories/": MEMORY_PAGES_DIR + "/",
+                "03-Reference/": DASHBOARD_DIR + "/",
+                "Dashboard/\u5168\u5c40\u8bb0\u5fc6\u7d22\u5f15.md": OBSIDIAN_INDEX_FILE,
+                "_index/": STATE_INDEX_DIR + "/",
+                "_agents/<agent>/daily/": f"{SOURCES_DIR}/<agent>/daily/",
+                "_agents/<agent>/conversations/": f"{SOURCES_DIR}/<agent>/conversations/",
+                "_agents/<agent>/evidence/": f"{SOURCES_DIR}/<agent>/evidence/",
+                "_agents/<agent>/summaries/": f"{STATE_AGENTS_DIR}/<agent>/summaries/",
+                "_agents/<agent>/index.json": f"{STATE_AGENTS_DIR}/<agent>/index.json",
+                "_agents/<agent>/skills.json": f"{STATE_AGENTS_DIR}/<agent>/skills.json",
+                "_agents/<agent>/skills.md": f"{STATE_AGENTS_DIR}/<agent>/skills.md",
+                "_shared/context/": SHARED_CONTEXT_DIR + "/",
+                "_shared/": STATE_SHARED_DIR + "/",
+                "_review/memory-sync/": STATE_REVIEW_DIR + "/",
+            },
+        }
+        self.write_json_atomic(self.vault_path / PATH_MAP_FILE, payload)
 
     def agent_memory_record(self, memory_id: str, memory: dict[str, Any]) -> dict[str, Any]:
         return {
@@ -3515,9 +3866,11 @@ class MemorySync:
 
     def write_agent_local_stores(self) -> None:
         for agent in ADAPTER_NAMES:
-            base = self.agent_dir(agent)
-            for name in ("daily", "evidence", "conversations", "summaries", "permanent"):
-                (base / name).mkdir(parents=True, exist_ok=True)
+            source_base = self.agent_dir(agent)
+            state_base = self.agent_state_dir(agent)
+            for name in ("daily", "handoffs", "evidence", "conversations", "conversation-summaries", "permanent"):
+                (source_base / name).mkdir(parents=True, exist_ok=True)
+            state_base.mkdir(parents=True, exist_ok=True)
 
             memories = self.agent_memories(agent)
             records = {
@@ -3531,9 +3884,9 @@ class MemorySync:
                     "generated_at": now_iso(),
                     "record_count": len(records),
                 },
-                "memories": records,
+                    "memories": records,
             }
-            self.write_json_atomic(base / "index.json", payload)
+            self.write_json_atomic(state_base / "index.json", payload)
 
             by_date: dict[str, list[dict[str, Any]]] = {}
             for memory_id, memory in memories.items():
@@ -3541,11 +3894,12 @@ class MemorySync:
                 match = re.search(r"(\d{4}-\d{2}-\d{2})\.md", source)
                 day = match.group(1) if match else "undated"
                 by_date.setdefault(day, []).append(self.agent_memory_record(memory_id, memory))
-            summary_dir = base / "summaries"
+            summary_dir = state_base / "summaries"
+            summary_dir.mkdir(parents=True, exist_ok=True)
             expected_summary_paths = {summary_dir / f"{day}.json" for day in by_date}
             for day, items in by_date.items():
                 self.write_json_atomic(
-                    base / "summaries" / f"{day}.json",
+                    summary_dir / f"{day}.json",
                     {
                         "_meta": {"schema": "memory-sync-agent-day-summary", "agent": agent, "date": day, "generated_at": now_iso()},
                         "items": items,
@@ -3662,7 +4016,7 @@ class MemorySync:
             by_agent.setdefault(str(record.get("agent")), []).append(record)
         for agent, records in by_agent.items():
             self.write_json_atomic(
-                self.agent_dir(agent) / "skills.json",
+                self.agent_state_dir(agent) / "skills.json",
                 {
                     "_meta": {
                         "schema": "memory-sync-agent-skills",
@@ -3674,7 +4028,7 @@ class MemorySync:
                 },
             )
             self.write_text_atomic(
-                self.agent_dir(agent) / "skills.md",
+                self.agent_state_dir(agent) / "skills.md",
                 self.agent_skill_markdown(agent, records, inventory["_meta"]["generated_at"]),
             )
 
@@ -3718,7 +4072,7 @@ class MemorySync:
             lines = [
                 "# Agent Skill 清单",
                 "",
-                "> 自动生成的 Obsidian 总入口。详细 skill 清单按 agent 分开存储；这里只做导航，避免把所有路径和说明堆在一个页面里。",
+                "> 自动生成的 Obsidian 导航入口。详细 skill 清单按 agent 分开存储，这里只做导航。",
                 "",
                 f"- 生成时间：{inventory['_meta']['generated_at']}",
                 f"- Skill 总数：{inventory['_meta']['record_count']}",
@@ -3729,7 +4083,17 @@ class MemorySync:
             ]
             for agent in sorted(by_agent):
                 lines.append(f"- [[{agent_skill_markdown_rel(agent)}|{agent} Skill 清单]] - {len(by_agent[agent])} 个")
-            lines.extend(["", "## 说明", "", "- `_agents/<agent>/skills.json` 是每个 agent 的机器可读清单。", "- `Personal/Agent Knowledge/<agent>/Agent Skills.md` 是给人看的个人知识库页面。", "- `03-Reference/Agent Skills.md` 是 Obsidian 里的公共入口。", ""])
+            lines.extend(
+                [
+                    "",
+                    "## 说明",
+                    "",
+                    f"- `{STATE_AGENTS_DIR}/<agent>/skills.json` 是每个 agent 的机器可读清单。",
+                    "- `Personal/Agent Knowledge/<agent>/Agent Skills.md` 是给人看的个人知识库页面。",
+                    f"- `{REFERENCE_AGENT_SKILLS_MD_FILE}` 是 Obsidian 公共入口。",
+                    "",
+                ]
+            )
             return "\n".join(lines).rstrip() + "\n"
 
         lines = [
@@ -3746,11 +4110,22 @@ class MemorySync:
         ]
         for agent in sorted(by_agent):
             lines.append(f"- [[{agent_skill_markdown_rel(agent)}|{agent} skills]] - {len(by_agent[agent])}")
-        lines.extend(["", "## Notes", "", "- `_agents/<agent>/skills.json` is the machine-readable per-agent inventory.", "- `Personal/Agent Knowledge/<agent>/Agent Skills.md` is the human-readable personal knowledge page.", "- `03-Reference/Agent Skills.md` is the public Obsidian entry point.", ""])
+        lines.extend(
+            [
+                "",
+                "## Notes",
+                "",
+                f"- `{STATE_AGENTS_DIR}/<agent>/skills.json` is the machine-readable per-agent inventory.",
+                "- `Personal/Agent Knowledge/<agent>/Agent Skills.md` is the human-readable personal knowledge page.",
+                f"- `{REFERENCE_AGENT_SKILLS_MD_FILE}` is the public Obsidian entry point.",
+                "",
+            ]
+        )
         return "\n".join(lines).rstrip() + "\n"
 
     def agent_skill_markdown(self, agent: str, records: list[dict[str, Any]], generated_at: str) -> str:
         language = self.preferred_language()
+        machine_index = f"{STATE_AGENTS_DIR}/{agent}/skills.json"
         if language == "zh":
             lines = [
                 f"# {agent} Skill 清单",
@@ -3760,7 +4135,7 @@ class MemorySync:
                 f"- 生成时间：{generated_at}",
                 f"- Agent：{agent}",
                 f"- Skill 数量：{len(records)}",
-                f"- 机器索引：`_agents/{agent}/skills.json`",
+                f"- 机器索引：`{machine_index}`",
                 "",
             ]
             for record in records:
@@ -3788,7 +4163,7 @@ class MemorySync:
             f"- Generated: {generated_at}",
             f"- Agent: {agent}",
             f"- Skills: {len(records)}",
-            f"- Machine index: `_agents/{agent}/skills.json`",
+            f"- Machine index: `{machine_index}`",
             "",
         ]
         for record in records:
@@ -3866,6 +4241,8 @@ class MemorySync:
                 self.write_text_atomic(shared_context_dir / f"{adapter}.md", self.adapter_markdown(context, adapter))
 
     def refresh_derived_outputs(self) -> None:
+        self.ensure_index_storage_current()
+        self.clean_unindexed_source_archives()
         self.write_agent_local_stores()
         self.sync_personal_knowledge_base()
         self.write_skill_inventory()
@@ -3875,15 +4252,20 @@ class MemorySync:
         if CONFIG["LEGACY_CONTEXT_ENABLED"]:
             self.write_agent_context("all", profile=profile, context=context)
         self.write_shared_layer(profile=profile, context=context)
+        self.write_path_map()
         self.write_obsidian_surfaces(profile=profile, context=context)
 
     def persist_index_outputs(self, save_index: bool = True) -> None:
-        if save_index:
+        if save_index or self.store.loaded_from_legacy_index:
             self.store.save()
         if CONFIG["DERIVED_OUTPUTS_ENABLED"]:
             self.refresh_derived_outputs()
         else:
             self.write_obsidian_index()
+
+    def ensure_index_storage_current(self) -> None:
+        if self.store.loaded_from_legacy_index:
+            self.store.save()
 
     def git_run(self, args: list[str], check: bool = False) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
@@ -3905,17 +4287,19 @@ class MemorySync:
 
     def git_paths(self) -> list[str]:
         candidates = [
-            f"_index/{INDEX_NAME}",
-            f"_index/{PROFILE_NAME}",
+            f"{STATE_INDEX_DIR}/{INDEX_NAME}",
+            f"{STATE_INDEX_DIR}/{PROFILE_NAME}",
             OBSIDIAN_INDEX_FILE,
             PROFILE_MD_FILE,
             MEMORY_DASHBOARD_FILE,
             MEMORY_PAGES_DIR,
-            "03-Reference/Agent Skills.md",
+            REFERENCE_AGENT_SKILLS_MD_FILE,
             VAULT_DAILY_DIR,
             PERMANENT_DIR,
             AGENTS_DIR,
             SHARED_DIR,
+            SHARED_CONTEXT_DIR,
+            PATH_MAP_FILE,
             PERSONAL_KNOWLEDGE_DIR,
         ]
         if CONFIG["LEGACY_CONTEXT_ENABLED"]:
@@ -4030,7 +4414,7 @@ class MemorySync:
         return 0
 
     def profile_path(self) -> Path:
-        return self.vault_path / "_index" / PROFILE_NAME
+        return self.vault_path / STATE_INDEX_DIR / PROFILE_NAME
 
     def context_path(self, name: str) -> Path:
         return self.vault_path / CONTEXT_DIR / name
@@ -4299,6 +4683,7 @@ class MemorySync:
         self.save_user_profile(profile)
         self.write_agent_local_stores()
         self.write_shared_layer(profile=profile)
+        self.write_path_map()
         self.write_obsidian_surfaces(profile=profile)
         self.log(f"Profile written: {self.vault_rel(self.profile_path())}")
         self.log(f"Profile markdown: {PROFILE_MD_FILE}")
@@ -4403,8 +4788,8 @@ class MemorySync:
                 "record_count": skill_count,
             },
             "paths": {
-                "memory_index": f"_index/{INDEX_NAME}",
-                "user_profile": f"_index/{PROFILE_NAME}",
+                "memory_index": f"{STATE_INDEX_DIR}/{INDEX_NAME}",
+                "user_profile": f"{STATE_INDEX_DIR}/{PROFILE_NAME}",
                 "profile_markdown": PROFILE_MD_FILE,
                 "daily_copies": VAULT_DAILY_DIR,
                 "context_dir": SHARED_CONTEXT_DIR,
@@ -4552,11 +4937,14 @@ class MemorySync:
         return written
 
     def cmd_context_export(self, adapter: str = "all") -> int:
+        self.ensure_index_storage_current()
+        self.clean_unindexed_source_archives()
         profile = self.load_or_build_profile()
         context = self.build_agent_context(profile)
         written = self.write_agent_context(adapter, profile=profile, context=context)
         self.write_agent_local_stores()
         self.write_shared_layer(profile=profile, context=context)
+        self.write_path_map()
         self.write_obsidian_surfaces(profile=profile, context=context)
         if adapter == "all":
             shared_written = [f"{SHARED_CONTEXT_DIR}/agent_brief.md"] + [f"{SHARED_CONTEXT_DIR}/{name}.md" for name in ADAPTER_NAMES]
@@ -5134,6 +5522,54 @@ class MemorySync:
                 )
         return "\n".join(lines).rstrip() + "\n"
 
+    def agent_conversation_summary_markdown(self, agent: str, conversation: dict[str, Any]) -> str:
+        meta = conversation.get("meta", {})
+        events = conversation.get("events", [])
+        labels = {"codex": "Codex", "claude": "Claude", "openclaw": "OpenClaw", "opencode": "OpenCode", "hermes-agent": "hermes-agent", "qoder": "Qoder"}
+        label = labels.get(agent, agent)
+        title = f"{label} Readable Transcript {conversation.get('date')} {str(conversation.get('session_id', ''))[:12]}"
+        message_count = sum(1 for event in events if event.get("kind") == "message")
+        tool_count = sum(1 for event in events if event.get("kind") == "tool_call")
+        lines = [
+            f"# {title}",
+            "",
+            f"- Agent: {agent}",
+            f"- Date: {conversation.get('date')}",
+            f"- Session: `{conversation.get('session_id')}`",
+            f"- Project: `{meta.get('cwd', '')}`",
+            f"- Source: `{meta.get('source_file', '')}`",
+            f"- Messages: {message_count}",
+            f"- Tool calls: {tool_count}",
+            "",
+            "## Conversation",
+            "",
+        ]
+        tool_lines: list[str] = []
+        for event in events:
+            time = str(event.get("time", ""))
+            line_no = event.get("line")
+            if event.get("kind") == "message":
+                role = "User" if event.get("role") == "user" else "Assistant"
+                lines.extend(
+                    [
+                        f"### {time} {role}",
+                        "",
+                        truncate_text(str(event.get("text", "")), 6000),
+                        "",
+                        f"_Source line: {line_no}_",
+                        "",
+                    ]
+                )
+            elif event.get("kind") == "tool_call":
+                summary = markdown_heading_text(event.get("summary"), "tool call")
+                tool_lines.append(f"- {time} `{event.get('name', 'tool')}`: {summary} (source line {line_no})")
+        if tool_lines:
+            lines.extend(["## Tool Activity", "", *tool_lines[:200], ""])
+            if len(tool_lines) > 200:
+                lines.append(f"- ... {len(tool_lines) - 200} more tool calls")
+                lines.append("")
+        return "\n".join(lines).rstrip() + "\n"
+
     def write_conversation_archive(
         self,
         agent: str,
@@ -5141,6 +5577,8 @@ class MemorySync:
         source_count: int,
     ) -> int:
         base = self.agent_dir(agent) / "conversations"
+        state_base = self.agent_state_dir(agent) / "conversations"
+        state_base.mkdir(parents=True, exist_ok=True)
         written: list[dict[str, Any]] = []
         for (day, session_id), conversation in sorted(conversations.items()):
             day_dir = base / day
@@ -5148,24 +5586,31 @@ class MemorySync:
             path = day_dir / f"{session_id}.md"
             self.write_text_atomic(path, self.agent_conversation_markdown(agent, conversation))
             rel = self.vault_rel(path)
+            summary_dir = self.agent_dir(agent) / "conversation-summaries" / day
+            summary_dir.mkdir(parents=True, exist_ok=True)
+            summary_path = summary_dir / f"{session_id}.md"
+            self.write_text_atomic(summary_path, self.agent_conversation_summary_markdown(agent, conversation))
+            summary_rel = self.vault_rel(summary_path)
             record = {
                 "agent": agent,
                 "date": day,
                 "session_id": session_id,
                 "path": rel,
+                "summary_path": summary_rel,
                 "source_file": conversation.get("meta", {}).get("source_file"),
                 "event_count": len(conversation.get("events", [])),
                 "generated_at": now_iso(),
             }
             written.append(record)
             self.log(f"Conversation archived: {rel} events={record['event_count']}")
+            self.log(f"Readable transcript written: {summary_rel}")
 
         by_day: dict[str, list[dict[str, Any]]] = {}
         for record in written:
             by_day.setdefault(str(record["date"]), []).append(record)
         for day, records in by_day.items():
             self.write_json_atomic(
-                base / day / "index.json",
+                state_base / day / "index.json",
                 {
                     "_meta": {
                         "schema": "memory-sync-conversation-day-index",
@@ -5177,7 +5622,7 @@ class MemorySync:
                 },
             )
         all_records: list[dict[str, Any]] = []
-        for index_path in sorted(base.glob("*/index.json")):
+        for index_path in sorted(state_base.glob("*/index.json")):
             try:
                 payload = json.loads(index_path.read_text(encoding="utf-8"))
             except json.JSONDecodeError:
@@ -5186,7 +5631,7 @@ class MemorySync:
             if isinstance(records, list):
                 all_records.extend([item for item in records if isinstance(item, dict)])
         self.write_json_atomic(
-            base / "index.json",
+            state_base / "index.json",
             {
                 "_meta": {
                     "schema": "memory-sync-conversation-index",
@@ -5301,7 +5746,7 @@ class MemorySync:
         now = datetime.now()
         day = now.date().isoformat()
         base = self.agent_dir(agent)
-        daily_dir = base / "daily"
+        daily_dir = base / "handoffs"
         daily_dir.mkdir(parents=True, exist_ok=True)
         daily_path = daily_dir / f"{day}.md"
         summary = extract_summary(text, limit=360)
@@ -5361,6 +5806,7 @@ class MemorySync:
         if CONFIG["LEGACY_CONTEXT_ENABLED"]:
             self.write_agent_context(agent, profile=profile, context=context)
         self.write_shared_layer(profile=profile, context=context)
+        self.write_path_map()
         self.write_obsidian_surfaces(profile=profile, context=context)
         text = self.adapter_markdown(context, agent)
         self.log(text)
@@ -5398,11 +5844,11 @@ class MemorySync:
         if not (self.vault_path / MEMORY_PAGES_DIR).exists():
             issues.append("missing Obsidian memory pages directory")
         if not (self.vault_path / AGENTS_DIR).exists():
-            issues.append("missing _agents directory")
+            issues.append("missing Sources directory")
         if not (self.vault_path / SHARED_DIR).exists():
-            issues.append("missing _shared directory")
+            issues.append("missing .memory-sync/shared directory")
         if not (self.vault_path / SHARED_CONTEXT_DIR).exists():
-            issues.append("missing _shared/context directory")
+            issues.append("missing Context directory")
         else:
             for adapter in ADAPTER_NAMES:
                 if not (self.vault_path / SHARED_CONTEXT_DIR / f"{adapter}.md").exists():

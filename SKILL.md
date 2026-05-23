@@ -1,6 +1,6 @@
 ---
 name: memory-sync
-description: Synchronize OpenClaw memory, Codex/Claude/OpenClaw/Hermes conversation archives, and multi-agent handoffs into Obsidian as a fast retention and context portability layer. Copies OpenClaw daily files, imports recall/dreaming/MEMORY candidates, archives local Codex/Claude/OpenClaw/Hermes chats, preserves non-daily agent knowledge into Personal/Agent Knowledge, syncs installed skill inventories, ingests Codex/Claude/OpenClaw/OpenCode/hermes-agent/Qoder handoff summaries, keeps per-agent stores under _agents, builds shared assets under _shared, maintains JSON/Markdown indexes, builds user profile, exports context packs, applies S1-S4 TTL, supports trigger check/hit, safe Obsidian-only cleanup, and optional Git/GitHub sync. Use for memory sync, conversations scan, ingest codex, candidates, handoff openclaw, skills sync, search, profile build, context export, hermes-agent handoff, git sync, status, or autopilot.
+description: Synchronize OpenClaw memory, Codex/Claude/OpenClaw/Hermes conversation archives, and multi-agent handoffs into Obsidian as a fast retention and context portability layer. Copies OpenClaw daily files, imports recall/dreaming/MEMORY candidates, archives local Codex/Claude/OpenClaw/Hermes chats, preserves non-daily agent knowledge into Personal/Agent Knowledge, syncs installed skill inventories, ingests Codex/Claude/OpenClaw/OpenCode/hermes-agent/Qoder handoff summaries, keeps readable agent sources under Sources, machine state under .memory-sync, and shared assets under Context/.memory-sync/shared, maintains JSON/Markdown indexes, builds user profile, exports context packs, applies S1-S4 TTL, supports trigger check/hit, safe Obsidian-only cleanup, and optional Git/GitHub sync. Use for memory sync, conversations scan, ingest codex, candidates, handoff openclaw, skills sync, search, profile build, context export, hermes-agent handoff, git sync, status, or autopilot.
 ---
 
 # Memory Sync
@@ -10,22 +10,22 @@ Use this skill as an OpenClaw companion and multi-agent handoff layer, not a rep
 ## Core Model
 
 - Treat `OPENCLAW_WORKSPACE` as read-only.
-- Copy `memory/YYYY-MM-DD.md` into `02-Lessons/OpenClaw-Daily/` before indexing.
-- Search only `_index/openclaw_memory_index.json`.
-- Generate `03-Reference/OpenClaw记忆索引.md` as the human-readable Obsidian entry.
-- Generate `03-Reference/Memory Dashboard.md` and `03-Reference/Memories/` cards so Obsidian is a readable memory console, not only a file sink.
+- Copy `memory/YYYY-MM-DD.md` into `Sources/openclaw/daily/` before indexing.
+- Search only `.memory-sync/index/memory_index.json`.
+- Generate `Dashboard/Memory Index.md` as the human-readable Obsidian entry.
+- Generate `Dashboard/Memory Dashboard.md` and `Memories/` cards so Obsidian is a readable memory console, not only a file sink.
 - Import OpenClaw distilled signals from `.dreams/short-term-recall.json`, `.dreams/phase-signals.json`, `memory/dreaming/rem/`, `memory/dreaming/deep/`, and promoted `MEMORY.md` entries.
 - Preserve non-daily agent knowledge such as `MEMORY.md`, `USER.md`, `AGENTS.md`, and tool/config notes into `Personal/Agent Knowledge/<agent>/`.
 - Detect high-value process memories such as success patterns, corrections, failure lessons, and user rules; these enter as S2 `process_memory` records.
-- Ingest explicit handoff summaries from Codex, Claude, OpenClaw, OpenCode, hermes-agent, and Qoder into their own `_agents/<agent>/daily/` lane before indexing.
-- Archive Codex Desktop, Claude Code, OpenClaw session-corpus, and Hermes `state.db` conversation history into `_agents/<agent>/conversations/YYYY-MM-DD/` by event timestamp where available, not file directory date.
-- Build `_index/user_profile.json` and `03-Reference/User画像.md` from USER.md, the memory index, and local agent configuration.
-- Export portable adapter context under `_shared/context/` for Codex, Claude, OpenClaw, OpenCode, hermes-agent, and Qoder.
-- Export installed skill inventory under `_shared/agent_skills.json`, `_agents/<agent>/skills.json`, and `Personal/Agent Knowledge/Agent Skills.md`.
+- Ingest explicit handoff summaries from Codex, Claude, OpenClaw, OpenCode, hermes-agent, and Qoder into their own `Sources/<agent>/handoffs/` lane before indexing.
+- Archive Codex Desktop, Claude Code, OpenClaw session-corpus, and Hermes `state.db` conversation history into `Sources/<agent>/conversations/YYYY-MM-DD/` by event timestamp where available, not file directory date.
+- Build `.memory-sync/index/user_profile.json` and `Dashboard/User Profile.md` from USER.md, the memory index, and local agent configuration.
+- Export portable adapter context under `Context/` for Codex, Claude, OpenClaw, OpenCode, hermes-agent, and Qoder.
+- Export installed skill inventory under `.memory-sync/shared/agent_skills.json`, `.memory-sync/agents/<agent>/skills.json`, and `Personal/Agent Knowledge/Agent Skills.md`.
 - Treat `_context/` as a legacy compatibility output only; it is disabled by default unless `LEGACY_CONTEXT_ENABLED=true`.
-- Keep per-agent local stores under `_agents/<agent>/` with separate `daily/`, `summaries/`, `index.json`, and `permanent/`.
-- Keep portable shared distilled assets under `_shared/`, including shared memory, profile, context JSON, and adapter Markdown.
-- Reject direct legacy/session sources such as `.dreams/session-corpus` and `main/sessions/*.jsonl`; when OpenClaw surfaces high-value session evidence, first curate a stable Obsidian evidence block under `_agents/openclaw/evidence/YYYY-MM-DD.md`, then index that Obsidian block.
+- Keep readable agent source archives under `Sources/<agent>/`; keep per-agent machine stores under `.memory-sync/agents/<agent>/` with `summaries/`, `index.json`, skills inventory, and conversation day indexes.
+- Keep portable shared distilled assets under `.memory-sync/shared/`, including shared memory, profile, context JSON, and adapter Markdown.
+- Reject direct legacy/session sources such as `.dreams/session-corpus` and `main/sessions/*.jsonl`; when OpenClaw surfaces high-value session evidence, first curate a stable Obsidian evidence block under `Sources/openclaw/evidence/YYYY-MM-DD.md`, then index that Obsidian block.
 - Remove only Obsidian daily copies, and only when no indexed memory references them.
 - Commit/push only through explicit `git sync` or `GIT_SYNC_ENABLED=true` autopilot.
 
@@ -37,7 +37,7 @@ Run commands from the skill folder:
 python scripts/main.py sync
 python scripts/main.py review prepare
 python scripts/main.py review apply decisions.json
-python scripts/main.py ingest codex --project D:/memory-sync-skill --note "current project handoff"
+python scripts/main.py ingest codex --project /path/to/project --note "current project handoff"
 python scripts/main.py ingest codex --stdin
 python scripts/main.py ingest claude --file session.md
 python scripts/main.py ingest opencode "decision: ..."
@@ -73,13 +73,13 @@ When the user asks to run memory sync in agent mode:
 
 ```text
 1. Run `python scripts/main.py review prepare`.
-2. Read the generated `_review/memory-sync/latest-pack.json`.
+2. Read the generated `.memory-sync/review/latest-pack.json`.
 3. Review every candidate in that pack.
 4. Write a decisions JSON file with one decision per candidate.
 5. Run `python scripts/main.py review apply <decisions.json>`.
 6. Run `python scripts/main.py status` and, if requested or configured, `python scripts/main.py git sync`.
 
-`sync` and `autopilot` are not considered complete in agent review mode until the agent has applied decisions. If they only write `_review/memory-sync/latest-pack.json`, treat the run as pending review, not as a finished memory sync.
+`sync` and `autopilot` are not considered complete in agent review mode until the agent has applied decisions. If they only write `.memory-sync/review/latest-pack.json`, treat the run as pending review, not as a finished memory sync.
 ```
 
 The script handles deterministic work: copying OpenClaw daily files into Obsidian, splitting source material, filtering obvious junk, preserving source anchors, curating high-value OpenClaw session evidence into stable Obsidian evidence blocks, validating decisions, writing JSON/Markdown surfaces, and keeping OpenClaw source files read-only.
@@ -151,6 +151,52 @@ Decision `reason` should name the value type or discard reason. Good keep reason
 - 如果新候选只是重复健康状态，直接丢弃，不要合并。
 
 `reason` 字段必须写明保留价值或丢弃原因。保留原因可以是 `decision`、`lesson`、`correction`、`todo`、`state_change`、`knowledge`、`user_rule`。丢弃原因可以是 `routine_status`、`duplicate_status`、`tool_noise`、`too_transient`、`no_future_value`、`covered_by_existing_memory`。
+
+### Codex Conversation Review Rules
+
+Codex conversation archives often include tool calls, tool outputs, environment context, AGENTS.md blocks, subagent notifications, command logs, and temporary encoding artifacts. These are usually evidence, not standalone memories.
+
+When reviewing Codex conversation candidates:
+
+- Keep the source archive unchanged.
+- Do not promote raw tool-call or tool-output blocks as standalone memories.
+- Tool output may be used as evidence when it proves a decision, failure, fix, path, command, or verification result.
+- Environment context, AGENTS.md instructions, and subagent notifications should usually be ignored unless the user explicitly changed a persistent rule or the content contains a concrete review finding.
+- Encoding-damaged text should usually be discarded, but keep the candidate if the readable parts still contain a clear decision, fix, or lesson.
+- Prefer one merged memory per task outcome, but keep separate memories when one task produced distinct reusable lessons.
+- Progress updates are usually not memories, unless they record a verified state transition, a failed approach, or a user-facing decision.
+
+Promote Codex candidates when they contain:
+
+- a verified command and result pair
+- a specific file, path, or config change
+- a rejected approach and why it failed
+- a user correction or stable preference
+- a cross-agent compatibility finding
+- a repeatable workflow or safety rule
+
+### Codex 对话候选专项规则
+
+Codex 对话归档里常包含 tool call、tool output、环境上下文、AGENTS.md 块、subagent 通知、命令日志和临时编码事故。这些通常是证据，不是独立记忆。
+
+审核 Codex 候选时：
+
+- 源归档保持不变。
+- 不把原始工具调用或工具输出块单独晋升为记忆。
+- 但 tool output 可以作为证据使用：当它证明了决策、失败、修复、路径、命令或验证结果时，应该保留其关键信息。
+- environment_context、AGENTS.md instructions、subagent_notification 通常忽略；但如果用户明确修改了持久规则，或其中包含具体 review finding，可以保留。
+- 编码损坏文本通常丢弃；但如果可读部分仍包含明确决策、修复或教训，可以保留。
+- 同一任务倾向合并为一条结果型记忆；但如果产生多个可复用教训，可以拆成多条。
+- 进度播报通常不是记忆；除非它记录了已验证的状态变化、失败路径或用户可见决策。
+
+应该保留的 Codex 候选：
+
+- 已验证的命令和结果
+- 具体文件、路径、配置变化
+- 被否定的方案和失败原因
+- 用户纠正或稳定偏好
+- 跨 agent 兼容性发现
+- 可复用流程或安全规则
 
 Decision output must follow this shape:
 
@@ -233,7 +279,7 @@ openclaw_rem_hits
 openclaw_concept_tags
 ```
 
-Only import a distilled candidate directly when its evidence resolves to an existing `memory/YYYY-MM-DD.md` source that can be copied into Obsidian. Session-corpus evidence is never indexed as a raw source; high-value lines are expanded with nearby context, copied into `_agents/openclaw/evidence/YYYY-MM-DD.md` with an `Original evidence` link, then reviewed like any other Obsidian-backed candidate. Do not store curated session evidence under `_agents/openclaw/daily/`, because that directory is rebuilt from daily copies.
+Only import a distilled candidate directly when its evidence resolves to an existing `memory/YYYY-MM-DD.md` source that can be copied into Obsidian. Session-corpus evidence is never indexed as a raw source; high-value lines are expanded with nearby context, copied into `Sources/openclaw/evidence/YYYY-MM-DD.md` with an `Original evidence` link, then reviewed like any other Obsidian-backed candidate. Do not store curated session evidence under `Sources/openclaw/daily/`, because that directory is rebuilt from daily copies.
 
 Search is keyword-based but query-aware: Chinese natural-language queries are expanded into useful n-grams and extracted keyword hints, so a query such as `小红书攻略提分` can still match memories tagged with `小红书` and `攻略`. Search results include summary, source, original evidence pointer, and an evidence preview.
 
@@ -255,7 +301,7 @@ python scripts/main.py ingest hermes-agent "decision: keep OpenClaw source read-
 
 Supported agents are `codex`, `claude`, `openclaw`, `opencode`, `hermes-agent`, and `qoder`.
 
-Ingest writes the submitted summary or captured project state to `_agents/<agent>/daily/YYYY-MM-DD.md` under `Summary` and `Original Context` sections. The index and portable context keep a compact summary plus `source_file`/`source_anchor` back to that original record. It creates an S1/S2 `agent_ingest` candidate when the content passes filters, merges duplicates into `_index/openclaw_memory_index.json`, then refreshes profile and `_shared` context outputs.
+Ingest writes the submitted summary or captured project state to `Sources/<agent>/handoffs/YYYY-MM-DD.md` under `Summary` and `Original Context` sections. The index and portable context keep a compact summary plus `source_file`/`source_anchor` back to that original record. It creates an S1/S2 `agent_ingest` candidate when the content passes filters, merges duplicates into `.memory-sync/index/memory_index.json`, then refreshes profile and `.memory-sync/shared` context outputs.
 
 For local chat history, prefer conversation archive over `ingest <agent> --project`:
 
@@ -267,7 +313,7 @@ python scripts/main.py conversations scan hermes-agent --date 2026-05-20
 python scripts/main.py conversations scan all --all
 ```
 
-Codex Desktop may keep a long thread in the rollout file for the day the session was created, not the day a later message was sent. The scanner therefore scans all `CODEX_HOME/sessions/**/rollout-*.jsonl` files and groups records by each event's internal timestamp. Claude Code scans `CLAUDE_HOME/projects/**/*.jsonl`. OpenClaw scans `OPENCLAW_WORKSPACE/memory/.dreams/session-corpus/YYYY-MM-DD.txt`. Hermes scans `HERMES_HOME/state.db` (`sessions` + `messages` tables); on Windows the default is `%LOCALAPPDATA%/hermes` when that directory exists. OpenCode and Qoder currently run path probes and should use explicit handoff until their local chat schemas are verified. The archive skips turn context, base instructions, developer/system prompts, and renders user/assistant messages plus compact tool-call details to `_agents/<agent>/conversations/YYYY-MM-DD/<session-id>.md`.
+Codex Desktop may keep a long thread in the rollout file for the day the session was created, not the day a later message was sent. The scanner therefore scans all `CODEX_HOME/sessions/**/rollout-*.jsonl` files and groups records by each event's internal timestamp. Claude Code scans `CLAUDE_HOME/projects/**/*.jsonl`. OpenClaw scans `OPENCLAW_WORKSPACE/memory/.dreams/session-corpus/YYYY-MM-DD.txt`. Hermes scans `HERMES_HOME/state.db` (`sessions` + `messages` tables); on Windows the default is `%LOCALAPPDATA%/hermes` when that directory exists. OpenCode and Qoder currently run path probes and should use explicit handoff until their local chat schemas are verified. The archive skips turn context, base instructions, developer/system prompts, and renders user/assistant messages plus compact tool-call details to `Sources/<agent>/conversations/YYYY-MM-DD/<session-id>.md`.
 
 Conversation archive is an evidence layer, not a memory by itself. The next `review prepare` includes high-value archived conversation segments in the review pack, and only reviewed decisions can promote them into the index.
 
@@ -283,23 +329,23 @@ python scripts/main.py candidates codex
 python scripts/main.py handoff openclaw
 ```
 
-`handoff <agent>` prints and refreshes the adapter context for the target agent so OpenClaw can consume Codex/Claude/OpenCode work through `_shared/context/openclaw.md` or the printed handoff.
+`handoff <agent>` prints and refreshes the adapter context for the target agent so OpenClaw can consume Codex/Claude/OpenCode work through `Context/openclaw.md` or the printed handoff.
 
 ## Context Source Of Truth
 
 Portable context source:
 
 ```text
-_agents/<agent>/daily/        raw agent-submitted handoffs and project captures
-_agents/<agent>/conversations/ readable local conversation archive
-_index/openclaw_memory_index.json
-_index/user_profile.json
-_shared/shared_memory_index.json
-_shared/agent_context.json
-_shared/context/<agent>.md
+Sources/<agent>/handoffs/        raw agent-submitted handoffs and project captures
+Sources/<agent>/conversations/ readable local conversation archive
+.memory-sync/index/memory_index.json
+.memory-sync/index/user_profile.json
+.memory-sync/shared/shared_memory_index.json
+.memory-sync/shared/agent_context.json
+Context/<agent>.md
 ```
 
-`_shared` is the portable context layer. `_context` is retained only for old integrations and is not generated unless `LEGACY_CONTEXT_ENABLED=true`.
+`.memory-sync/shared` is the portable context layer. `_context` is retained only for old integrations and is not generated unless `LEGACY_CONTEXT_ENABLED=true`.
 
 ## Retention
 
@@ -333,15 +379,15 @@ Personal/Agent Knowledge/<agent>/Agent Skills.md
 Skill inventory outputs:
 
 ```text
-_shared/agent_skills.json
-_agents/<agent>/skills.json
-_agents/<agent>/skills.md
-03-Reference/Agent Skills.md
+.memory-sync/shared/agent_skills.json
+.memory-sync/agents/<agent>/skills.json
+Personal/Agent Knowledge/<agent>/Agent Skills.md
+Dashboard/Agent Skills.md
 Personal/Agent Knowledge/Agent Skills.md
 Personal/Agent Knowledge/<agent>/Agent Skills.md
 ```
 
-`03-Reference/Agent Skills.md` is the Obsidian navigation entry. `Personal/Agent Knowledge/Agent Skills.md` is the personal navigation entry. The detailed human-readable inventory is split by agent under `Personal/Agent Knowledge/<agent>/Agent Skills.md`, while `_agents/<agent>/skills.json` remains the machine-readable per-agent store.
+`Dashboard/Agent Skills.md` is the Obsidian navigation entry. `Personal/Agent Knowledge/Agent Skills.md` is the personal navigation entry. The detailed human-readable inventory is split by agent under `Personal/Agent Knowledge/<agent>/Agent Skills.md`, while `.memory-sync/agents/<agent>/skills.json` remains the machine-readable per-agent store.
 
 The skill inventory records skill name, function summary, agent, level/source directory, local path, modified time, hash, enabled state, and frontmatter validity. OpenClaw is scanned across official npm, workspace, and user skill directories so multi-level installations are not missed. Hermes is scanned from `HERMES_HOME/skills` and `%LOCALAPPDATA%/hermes/skills` on Windows. Markdown output language is inferred from the user's local profile/rules, or can be forced with `MEMORY_SYNC_LANGUAGE=zh` or `MEMORY_SYNC_LANGUAGE=en`.
 
@@ -365,7 +411,7 @@ Recommended rule entry points:
 | Codex | Project `AGENTS.md`, or user-level `~/.codex/AGENTS.md` |
 | Claude Code | Project `CLAUDE.md`, project `.claude/CLAUDE.md`, or user-level `~/.claude/CLAUDE.md` |
 | OpenCode | Project `AGENTS.md`, user-level `~/.config/opencode/AGENTS.md`, or `CLAUDE.md` when using Claude-compatible instructions |
-| hermes-agent | Its configured system prompt/rule file; if there is no persistent rule file, provide `_shared/context/hermes-agent.md` as the handoff contract |
+| hermes-agent | Its configured system prompt/rule file; if there is no persistent rule file, provide `Context/hermes-agent.md` as the handoff contract |
 
 OpenClaw example:
 
@@ -379,7 +425,7 @@ OpenClaw example:
 执行命令：
 
 ```bash
-python C:\Users\Administrator\.openclaw\workspace\skills\memory-sync\scripts\main.py search "关键词"
+python <path-to-memory-sync>/scripts/main.py search "关键词"
 ```
 
 流程：
@@ -457,51 +503,51 @@ python scripts/main.py context export qoder
 Profile outputs:
 
 ```text
-_index/user_profile.json
-03-Reference/User画像.md
+.memory-sync/index/user_profile.json
+Dashboard/User Profile.md
 ```
 
 Portable context outputs:
 
 ```text
-_shared/agent_context.json
-_shared/context/agent_brief.md
-_shared/context/codex.md
-_shared/context/claude.md
-_shared/context/openclaw.md
-_shared/context/opencode.md
-_shared/context/hermes-agent.md
+.memory-sync/shared/agent_context.json
+Context/agent_brief.md
+Context/codex.md
+Context/claude.md
+Context/openclaw.md
+Context/opencode.md
+Context/hermes-agent.md
 ```
 
-Each adapter context includes a memory retrieval contract that points to that agent's own rule entry point. OpenClaw uses `AGENTS.md`; Codex uses `AGENTS.md`; Claude Code uses `CLAUDE.md`; OpenCode uses `AGENTS.md` or Claude-compatible rules; hermes-agent uses its configured rule/system prompt or `_shared/context/hermes-agent.md` as a handoff contract. OpenClaw and hermes-agent also include stricter operating contracts for rule reading, conflict reporting, and source-memory safety.
+Each adapter context includes a memory retrieval contract that points to that agent's own rule entry point. OpenClaw uses `AGENTS.md`; Codex uses `AGENTS.md`; Claude Code uses `CLAUDE.md`; OpenCode uses `AGENTS.md` or Claude-compatible rules; hermes-agent uses its configured rule/system prompt or `Context/hermes-agent.md` as a handoff contract. OpenClaw and hermes-agent also include stricter operating contracts for rule reading, conflict reporting, and source-memory safety.
 
 Agent-local outputs:
 
 ```text
-_agents/openclaw/daily/
-_agents/openclaw/summaries/
-_agents/openclaw/index.json
-_agents/codex/index.json
-_agents/claude/index.json
-_agents/opencode/index.json
-_agents/hermes-agent/index.json
+Sources/openclaw/daily/
+Sources/openclaw/summaries/
+.memory-sync/agents/openclaw/index.json
+.memory-sync/agents/codex/index.json
+.memory-sync/agents/claude/index.json
+.memory-sync/agents/opencode/index.json
+.memory-sync/agents/hermes-agent/index.json
 ```
 
 Shared portable outputs:
 
 ```text
-_shared/shared_memory_index.json
-_shared/user_profile.json
-_shared/agent_context.json
-_shared/context/*.md
+.memory-sync/shared/shared_memory_index.json
+.memory-sync/shared/user_profile.json
+.memory-sync/shared/agent_context.json
+Context/*.md
 ```
 
 Obsidian-readable outputs:
 
 ```text
-03-Reference/Memory Dashboard.md
-03-Reference/Memories/memory_001.md
-03-Reference/Memories/memory_002.md
+Dashboard/Memory Dashboard.md
+Memories/memory_001.md
+Memories/memory_002.md
 ```
 
 Memory page file names are stable and ID-only (`memory_001.md`) so Obsidian, Git, and cross-platform sync do not break on long titles, punctuation, emoji, or renamed summaries. Each memory page includes YAML frontmatter, tags, source-agent metadata, wikilinks to the source daily copy, and links back to the index/profile. Shared context uses a stricter snapshot than the full index: S1 memories remain searchable in Obsidian but do not enter adapter context until OpenClaw distills them, the user reinforces them, or they reach a stronger stage.
@@ -518,4 +564,8 @@ Use:
 python scripts/main.py git sync
 ```
 
-The command stages `_index/openclaw_memory_index.json`, `03-Reference/OpenClaw记忆索引.md`, `02-Lessons/OpenClaw-Daily/`, and permanent memory files, then commits and pushes from the Obsidian vault repository.
+The command stages `.memory-sync/index/memory_index.json`, `Dashboard/Memory Index.md`, `Sources/`, `Memories/`, `Context/`, and `.memory-sync/shared/`, then commits and pushes from the Obsidian vault repository.
+
+## Conversation Archive
+
+Conversation scan also writes a readable transcript under `Sources/<agent>/conversation-summaries/YYYY-MM-DD/<session-id>.md`. The full archive remains under `Sources/<agent>/conversations/` as evidence, while memory pages link to the readable transcript for Obsidian review.
