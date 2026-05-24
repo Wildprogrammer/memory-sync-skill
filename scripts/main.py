@@ -3733,132 +3733,79 @@ class MemorySync:
         lines.extend(["", "## Optional Dataview", "", "```dataview", f'TABLE stage, source_agent, expire_at FROM "{MEMORY_PAGES_DIR}" SORT stage DESC', "```", ""])
         self.write_text_atomic(self.vault_path / MEMORY_DASHBOARD_FILE, "\n".join(lines).rstrip() + "\n")
 
-    def directory_entry_markdown(self, display_path: str, description: str, language: str) -> str:
-        if language == "zh":
-            return "\n".join(
-                [
-                    f"# {display_path}",
-                    "",
-                    f"> 文件说明：这是 `{display_path}` 的目录入口页，用于让 Obsidian 正向链接可以跳转到这个位置。",
-                    "",
-                    f"- 目录职责：{description}",
-                    f"- 上级目录：[[{MEMORY_DIRECTORY_FILE}|Memory Directory]]",
-                    "",
-                ]
+    def cleanup_generated_directory_readmes(self) -> None:
+        for path in self.vault_path.rglob("README.md"):
+            if not path.is_file():
+                continue
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            generated_by_memory_sync = (
+                "[[Dashboard/Memory Directory.md|Memory Directory]]" in text
+                and ("目录入口页" in text or "directory entry page" in text)
             )
-        return "\n".join(
-            [
-                f"# {display_path}",
-                "",
-                f"> File note: this is the directory entry page for `{display_path}`, so Obsidian forward links can jump to this location.",
-                "",
-                f"- Directory role: {description}",
-                f"- Parent directory: [[{MEMORY_DIRECTORY_FILE}|Memory Directory]]",
-                "",
-            ]
-        )
-
-    def write_directory_entry_pages(self, rows: list[tuple[str, str, str]], language: str) -> None:
-        for readme_rel, display_path, description in rows:
-            self.write_text_atomic(
-                self.vault_path / readme_rel,
-                self.directory_entry_markdown(display_path, description, language),
-            )
+            if generated_by_memory_sync:
+                path.unlink()
 
     def write_memory_directory(self) -> None:
         language = self.preferred_language()
         zh = language == "zh"
         if zh:
             title = "Memory Directory / 记忆目录"
-            note = "文件说明：这是 Memory Sync 自动生成的 Obsidian 导航目录，用正向链接连接关键入口，并用目录位置说明记忆卡片、来源归档和个人知识放在哪里。"
+            note = "文件说明：这是 Memory Sync 自动生成的 Obsidian 导航目录，用正向链接连接记忆索引、跨 Agent 上下文和个人知识入口。"
             generated = "生成时间"
             dashboard_label = "核心入口"
             memory_label = "记忆卡片"
             context_label = "跨 Agent 上下文"
-            source_label = "来源归档"
             personal_label = "个人知识"
+            dashboard_rows = [
+                (PROFILE_MD_FILE, PROFILE_MD_FILE, "动态用户画像，用于帮助 agent 理解用户偏好、项目背景和协作边界。"),
+                (REFERENCE_AGENT_SKILLS_MD_FILE, REFERENCE_AGENT_SKILLS_MD_FILE, "已同步的 skill 能力总览，用于让 agent 知道当前可用工具。"),
+            ]
             memory_directory_rows = [
-                (f"{MEMORY_PAGES_DIR}/README.md", MEMORY_PAGES_DIR + "/", "S2+ 记忆卡片目录，具体记忆文件在这里。"),
-                (f"{PERMANENT_DIR}/README.md", PERMANENT_DIR + "/", "S4 永久记忆目录，长期保留的永久知识在这里。"),
+                (OBSIDIAN_INDEX_FILE, OBSIDIAN_INDEX_FILE, "记忆内容、阶段、来源追溯都从这里进入。"),
+                (MEMORY_DASHBOARD_FILE, MEMORY_DASHBOARD_FILE, "查看记忆总量、阶段分布和共享记忆概览。"),
             ]
             context_rows = [
-                (f"{SHARED_CONTEXT_DIR}/agent_brief.md", "Context/agent_brief.md", "跨 agent 精简上下文，切换 agent 或交接任务前优先看这里。", True),
-                (f"{SHARED_CONTEXT_DIR}/README.md", SHARED_CONTEXT_DIR + "/", "各 agent 的 Markdown 上下文适配文件目录。", False),
-            ]
-            source_groups = [
-                ("codex", [
-                    (f"{SOURCES_DIR}/codex/conversations/README.md", f"{SOURCES_DIR}/codex/conversations/", "Codex 完整聊天归档，作为证据层。"),
-                    (f"{SOURCES_DIR}/codex/conversation-summaries/README.md", f"{SOURCES_DIR}/codex/conversation-summaries/", "Codex 可读聊天摘要，适合快速回看。"),
-                    (f"{SOURCES_DIR}/codex/handoffs/README.md", f"{SOURCES_DIR}/codex/handoffs/", "Codex 主动交接摘要。"),
-                ]),
-                ("openclaw", [
-                    (f"{SOURCES_DIR}/openclaw/daily/README.md", f"{SOURCES_DIR}/openclaw/daily/", "OpenClaw 每日记忆副本，只操作 Obsidian 副本。"),
-                    (f"{SOURCES_DIR}/openclaw/evidence/README.md", f"{SOURCES_DIR}/openclaw/evidence/", "OpenClaw 高价值证据块。"),
-                    (f"{SOURCES_DIR}/openclaw/conversation-summaries/README.md", f"{SOURCES_DIR}/openclaw/conversation-summaries/", "OpenClaw 可读聊天摘要。"),
-                    (f"{SOURCES_DIR}/openclaw/handoffs/README.md", f"{SOURCES_DIR}/openclaw/handoffs/", "OpenClaw 主动交接摘要。"),
-                ]),
-                ("其他 agent", [
-                    (f"{SOURCES_DIR}/README.md", f"{SOURCES_DIR}/", "Claude、Hermes 等其他 agent 的来源归档总入口。"),
-                ]),
+                (f"{SHARED_CONTEXT_DIR}/agent_brief.md", f"{SHARED_CONTEXT_DIR}/agent_brief.md", "跨 agent 精简上下文，切换 agent 或交接任务前优先看这里。"),
             ]
             personal_rows = [
                 (AGENT_SKILLS_MD_FILE, "Personal/Agent Knowledge/Agent Skills.md", "个人视角的 Agent Skill 总清单。", True),
                 (f"{PERSONAL_KNOWLEDGE_DIR}/openclaw/USER.md", "Personal/Agent Knowledge/openclaw/USER.md", "OpenClaw 用户画像源文件。", True),
                 (f"{PERSONAL_KNOWLEDGE_DIR}/openclaw/AGENTS.md", "Personal/Agent Knowledge/openclaw/AGENTS.md", "OpenClaw 行为规则源文件。", True),
                 (f"{PERSONAL_KNOWLEDGE_DIR}/openclaw/MEMORY.md", "Personal/Agent Knowledge/openclaw/MEMORY.md", "OpenClaw 长期记忆源文件。", True),
-                (f"{PERSONAL_KNOWLEDGE_DIR}/README.md", PERSONAL_KNOWLEDGE_DIR + "/", "各 agent 的规则、配置、技能清单和非每日知识。", False),
             ]
         else:
             title = "Memory Directory"
-            note = "File note: this auto-generated Obsidian navigation directory links key entries and shows where memory pages, source archives, and personal knowledge live."
+            note = "File note: this auto-generated Obsidian navigation directory links memory indexes, cross-agent context, and personal knowledge entries."
             generated = "Generated"
             dashboard_label = "Core Entries"
             memory_label = "Memory Pages"
             context_label = "Cross-Agent Context"
-            source_label = "Source Archives"
             personal_label = "Personal Knowledge"
+            dashboard_rows = [
+                (PROFILE_MD_FILE, PROFILE_MD_FILE, "Dynamic user profile for preferences, project background, and collaboration boundaries."),
+                (REFERENCE_AGENT_SKILLS_MD_FILE, REFERENCE_AGENT_SKILLS_MD_FILE, "Synced skill capability overview so agents know which tools are available."),
+            ]
             memory_directory_rows = [
-                (f"{MEMORY_PAGES_DIR}/README.md", MEMORY_PAGES_DIR + "/", "S2+ memory page directory; concrete memory files live here."),
-                (f"{PERMANENT_DIR}/README.md", PERMANENT_DIR + "/", "S4 permanent memory directory for long-term knowledge."),
+                (OBSIDIAN_INDEX_FILE, OBSIDIAN_INDEX_FILE, "Enter memories, stages, and source trace links here."),
+                (MEMORY_DASHBOARD_FILE, MEMORY_DASHBOARD_FILE, "View memory counts, stage distribution, and shared-memory overview."),
             ]
             context_rows = [
-                (f"{SHARED_CONTEXT_DIR}/agent_brief.md", "Context/agent_brief.md", "Portable brief for agent switching and handoff.", True),
-                (f"{SHARED_CONTEXT_DIR}/README.md", SHARED_CONTEXT_DIR + "/", "Markdown context adapters for each agent.", False),
-            ]
-            source_groups = [
-                ("codex", [
-                    (f"{SOURCES_DIR}/codex/conversations/README.md", f"{SOURCES_DIR}/codex/conversations/", "Full Codex conversation archives as evidence."),
-                    (f"{SOURCES_DIR}/codex/conversation-summaries/README.md", f"{SOURCES_DIR}/codex/conversation-summaries/", "Readable Codex conversation summaries."),
-                    (f"{SOURCES_DIR}/codex/handoffs/README.md", f"{SOURCES_DIR}/codex/handoffs/", "Codex handoff summaries."),
-                ]),
-                ("openclaw", [
-                    (f"{SOURCES_DIR}/openclaw/daily/README.md", f"{SOURCES_DIR}/openclaw/daily/", "OpenClaw daily memory copies in Obsidian."),
-                    (f"{SOURCES_DIR}/openclaw/evidence/README.md", f"{SOURCES_DIR}/openclaw/evidence/", "Curated OpenClaw evidence blocks."),
-                    (f"{SOURCES_DIR}/openclaw/conversation-summaries/README.md", f"{SOURCES_DIR}/openclaw/conversation-summaries/", "Readable OpenClaw conversation summaries."),
-                    (f"{SOURCES_DIR}/openclaw/handoffs/README.md", f"{SOURCES_DIR}/openclaw/handoffs/", "OpenClaw handoff summaries."),
-                ]),
-                ("other agents", [
-                    (f"{SOURCES_DIR}/README.md", f"{SOURCES_DIR}/", "Source archive entry for Claude, Hermes, and other agents."),
-                ]),
+                (f"{SHARED_CONTEXT_DIR}/agent_brief.md", f"{SHARED_CONTEXT_DIR}/agent_brief.md", "Portable brief for agent switching and handoff."),
             ]
             personal_rows = [
                 (AGENT_SKILLS_MD_FILE, "Personal/Agent Knowledge/Agent Skills.md", "Personal Agent Skill index.", True),
                 (f"{PERSONAL_KNOWLEDGE_DIR}/openclaw/USER.md", "Personal/Agent Knowledge/openclaw/USER.md", "OpenClaw user profile source.", True),
                 (f"{PERSONAL_KNOWLEDGE_DIR}/openclaw/AGENTS.md", "Personal/Agent Knowledge/openclaw/AGENTS.md", "OpenClaw behavior rules source.", True),
                 (f"{PERSONAL_KNOWLEDGE_DIR}/openclaw/MEMORY.md", "Personal/Agent Knowledge/openclaw/MEMORY.md", "OpenClaw long-term memory source.", True),
-                (f"{PERSONAL_KNOWLEDGE_DIR}/README.md", PERSONAL_KNOWLEDGE_DIR + "/", "Rules, config, skill inventory, and non-daily knowledge by agent.", False),
             ]
 
         def file_link(rel: str, label: str) -> str:
             return f"[[{rel}|{label}]]"
 
-        directory_entry_rows: list[tuple[str, str, str]] = []
-        directory_entry_rows.extend(memory_directory_rows)
-        directory_entry_rows.extend((rel, label, description) for rel, label, description, linked in context_rows if not linked)
-        for _agent, rows in source_groups:
-            directory_entry_rows.extend(rows)
-        directory_entry_rows.extend((rel, label, description) for rel, label, description, linked in personal_rows if not linked)
-        self.write_directory_entry_pages(directory_entry_rows, language)
+        self.cleanup_generated_directory_readmes()
 
         lines = [
             f"# {title}",
@@ -3869,27 +3816,16 @@ class MemorySync:
             "",
             f"## {dashboard_label}",
             "",
-            f"- {file_link(MEMORY_DASHBOARD_FILE, MEMORY_DASHBOARD_FILE)}",
-            f"- {file_link(OBSIDIAN_INDEX_FILE, OBSIDIAN_INDEX_FILE)}",
-            f"- {file_link(PROFILE_MD_FILE, PROFILE_MD_FILE)}",
-            f"- {file_link(REFERENCE_AGENT_SKILLS_MD_FILE, REFERENCE_AGENT_SKILLS_MD_FILE)}",
-            "",
-            f"## {memory_label}",
-            "",
         ]
+        for rel, label, description in dashboard_rows:
+            lines.append(f"- {file_link(rel, label)}：{description}")
+        lines.extend(["", f"## {memory_label}", ""])
         for rel, label, description in memory_directory_rows:
             lines.append(f"- {file_link(rel, label)}：{description}")
 
         lines.extend(["", f"## {context_label}", ""])
-        for rel, label, description, _should_link in context_rows:
+        for rel, label, description in context_rows:
             lines.append(f"- {file_link(rel, label)}：{description}")
-
-        lines.extend(["", f"## {source_label}", ""])
-        for agent, rows in source_groups:
-            lines.extend([f"### {agent}", ""])
-            for rel, label, description in rows:
-                lines.append(f"- {file_link(rel, label)}：{description}")
-            lines.append("")
 
         lines.extend(["", f"## {personal_label}", ""])
         for rel, label, description, _should_link in personal_rows:

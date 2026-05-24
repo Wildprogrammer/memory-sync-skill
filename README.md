@@ -157,7 +157,7 @@ Obsidian does not need to be running. The script writes Markdown and JSON files 
 - Added agent-assisted review mode: the current agent reviews candidate memories, while scripts prepare evidence and apply structured decisions.
 - Added readable conversation archives for Codex, Claude, OpenClaw, and Hermes local logs; archived conversations enter review before becoming memories.
 - Added stricter review grounding checks and read-only behavior for diagnostic context commands.
-- Added `Dashboard/Memory Directory.md` as a human navigation page with Obsidian forward links and lightweight directory `README.md` entry notes.
+- Added `Dashboard/Memory Directory.md` as a human navigation page that links meaningful memory, context, profile, and skill entries without placeholder README navigation.
 
 ## 当前版本
 
@@ -168,7 +168,7 @@ Obsidian does not need to be running. The script writes Markdown and JSON files 
 - 新增 agent-assisted review 模式：当前 agent 负责审核候选记忆，脚本负责准备证据和结构化落库。
 - 新增 Codex、Claude、OpenClaw、Hermes 本地对话归档能力；归档对话先进入 review，再决定是否晋升为记忆。
 - 新增更严格的证据校验，并让上下文诊断类命令保持只读。
-- 新增 `Dashboard/Memory Directory.md` 人类导航页，通过 Obsidian 正向链接和轻量目录 `README.md` 入口页组织记忆位置。
+- 新增 `Dashboard/Memory Directory.md` 人类导航页，通过有意义的记忆、上下文、画像和技能入口组织导航，不再用占位 README 伪装目录。
 
 ## Documentation
 
