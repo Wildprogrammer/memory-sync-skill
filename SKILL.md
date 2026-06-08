@@ -1,6 +1,6 @@
 ---
 name: memory-sync
-description: Sync OpenClaw memory plus Codex, Claude, OpenClaw, Hermes, OpenCode, and Qoder conversation archives into Obsidian/Git as a searchable, portable, user-owned agent memory layer. Use for memory sync, conversation scan, review apply, search, profile/context export, skill inventory sync, retention cleanup, and optional Git sync.
+description: Use when preserving, searching, reviewing, or exporting user-owned agent memory across OpenClaw, Codex, Claude, OpenCode, Hermes, Qoder, Obsidian, and Git. Inputs are local memory/chat stores and handoff summaries; outputs are Obsidian sources, memory indexes, context/profile packs, skill inventories, and optional Git sync. Prefer after native agent memory/candidate extraction. Do not use for code debugging, unrelated backups, cloud memory, or temporary notes without durable value.
 version: 1.0.0
 metadata:
   openclaw:
