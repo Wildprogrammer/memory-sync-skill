@@ -1,6 +1,96 @@
 ---
 name: memory-sync
-description: Synchronize OpenClaw memory, Codex/Claude/OpenClaw/Hermes conversation archives, and multi-agent handoffs into Obsidian as a fast retention and context portability layer. Copies OpenClaw daily files, imports recall/dreaming/MEMORY candidates, archives local Codex/Claude/OpenClaw/Hermes chats, preserves non-daily agent knowledge into Personal/Agent Knowledge, syncs installed skill inventories, ingests Codex/Claude/OpenClaw/OpenCode/hermes-agent/Qoder handoff summaries, keeps readable agent sources under Sources, machine state under .memory-sync, and shared assets under Context/.memory-sync/shared, maintains JSON/Markdown indexes, builds user profile, exports context packs, applies S1-S4 TTL, supports trigger check/hit, safe Obsidian-only cleanup, and optional Git/GitHub sync. Use for memory sync, conversations scan, ingest codex, candidates, handoff openclaw, skills sync, search, profile build, context export, hermes-agent handoff, git sync, status, or autopilot.
+description: Sync OpenClaw memory plus Codex, Claude, OpenClaw, Hermes, OpenCode, and Qoder conversation archives into Obsidian/Git as a searchable, portable, user-owned agent memory layer. Use for memory sync, conversation scan, review apply, search, profile/context export, skill inventory sync, retention cleanup, and optional Git sync.
+version: 1.0.0
+metadata:
+  openclaw:
+    requires:
+      bins:
+        - python
+    skillKey: memory-sync
+    homepage: https://github.com/Wildprogrammer/memory-sync-skill
+    envVars:
+      - name: OPENCLAW_WORKSPACE
+        required: false
+        description: Optional OpenClaw workspace path. Defaults to ~/.openclaw/workspace.
+      - name: OBSIDIAN_VAULT_PATH
+        required: false
+        description: Optional Obsidian vault path. Defaults to ~/Documents/obsidian/vault.
+      - name: MEMORY_SYNC_REVIEW_MODE
+        required: false
+        description: Optional review mode. Use agent for current-agent review or rules for deterministic fallback.
+      - name: OPENCLAW_IMPORT_DISTILLED
+        required: false
+        description: Optional toggle for importing OpenClaw recall and dreaming candidates.
+      - name: CODEX_HOME
+        required: false
+        description: Optional Codex home used for local conversation archive discovery.
+      - name: CLAUDE_HOME
+        required: false
+        description: Optional Claude home used for local conversation archive discovery.
+      - name: HERMES_HOME
+        required: false
+        description: Optional Hermes home used for state.db and skill discovery.
+      - name: HERMES_STATE_DB
+        required: false
+        description: Optional explicit Hermes state.db path.
+      - name: QODER_HOME
+        required: false
+        description: Optional Qoder home used for local archive discovery.
+      - name: MEMORY_SYNC_PROJECT_ROOTS
+        required: false
+        description: Optional path-list of project roots to scan for agent rule/profile files.
+      - name: MEMORY_SYNC_AGENT_KNOWLEDGE_FILES
+        required: false
+        description: Optional path-list of extra rule/profile files to preserve as personal agent knowledge.
+      - name: MEMORY_SYNC_SKILL_DIRS
+        required: false
+        description: Optional path-list of extra skill directories to include in skill inventory sync.
+      - name: MEMORY_SYNC_LANGUAGE
+        required: false
+        description: Optional output language hint such as zh or en for human-facing Markdown.
+      - name: HIT_COOLDOWN_HOURS
+        required: false
+        description: Optional trigger-hit cooldown in hours.
+      - name: S1_TTL_MIN_DAYS
+        required: false
+        description: Optional minimum TTL for S1 memories.
+      - name: S1_TTL_MAX_DAYS
+        required: false
+        description: Optional maximum TTL for S1 memories.
+      - name: NOISE_MIN_HITS
+        required: false
+        description: Optional minimum hit count before trigger-noise checks run.
+      - name: NOISE_DOMINANCE_RATIO
+        required: false
+        description: Optional dominance ratio for single-trigger noise detection.
+      - name: CONTEXT_EXPORT_ENABLED
+        required: false
+        description: Optional toggle for portable context export.
+      - name: LEGACY_CONTEXT_ENABLED
+        required: false
+        description: Optional toggle for legacy _context compatibility output.
+      - name: DERIVED_OUTPUTS_ENABLED
+        required: false
+        description: Optional toggle for rebuilding profile, context, and Markdown surfaces.
+      - name: GIT_SYNC_ENABLED
+        required: false
+        description: Optional toggle for running git sync during autopilot.
+      - name: GIT_PUSH_ENABLED
+        required: false
+        description: Optional toggle for pushing during git sync.
+      - name: GIT_REMOTE
+        required: false
+        description: Optional git remote name, default origin.
+      - name: GIT_BRANCH
+        required: false
+        description: Optional git branch override.
+      - name: APPDATA
+        required: false
+        description: Windows system path used for local agent discovery when present.
+      - name: LOCALAPPDATA
+        required: false
+        description: Windows system path used for local agent discovery when present.
 ---
 
 # Memory Sync
@@ -18,7 +108,7 @@ Use this skill as an OpenClaw companion and multi-agent handoff layer, not a rep
 - Preserve non-daily agent knowledge such as `MEMORY.md`, `USER.md`, `AGENTS.md`, and tool/config notes into `Personal/Agent Knowledge/<agent>/`.
 - Detect high-value process memories such as success patterns, corrections, failure lessons, and user rules; these enter as S2 `process_memory` records.
 - Ingest explicit handoff summaries from Codex, Claude, OpenClaw, OpenCode, hermes-agent, and Qoder into their own `Sources/<agent>/handoffs/` lane before indexing.
-- Archive Codex Desktop, Claude Code, OpenClaw session-corpus, and Hermes `state.db` conversation history into `Sources/<agent>/conversations/YYYY-MM-DD/` by event timestamp where available, not file directory date.
+- Archive Codex Desktop/CLI, Claude Code, OpenClaw session-corpus, Hermes, and OpenCode conversation history into `Sources/<agent>/conversations/YYYY-MM-DD/` by event timestamp where available, not file directory date.
 - Build `.memory-sync/index/user_profile.json` and `Dashboard/User Profile.md` from USER.md, the memory index, and local agent configuration.
 - Export portable adapter context under `Context/` for Codex, Claude, OpenClaw, OpenCode, hermes-agent, and Qoder.
 - Export installed skill inventory under `.memory-sync/shared/agent_skills.json`, `.memory-sync/agents/<agent>/skills.json`, and `Personal/Agent Knowledge/Agent Skills.md`.
@@ -44,6 +134,7 @@ python scripts/main.py ingest opencode "decision: ..."
 python scripts/main.py conversations scan codex --date 2026-05-20
 python scripts/main.py conversations scan claude --date 2026-05-13
 python scripts/main.py conversations scan openclaw --date 2026-05-19
+python scripts/main.py conversations scan opencode --all
 python scripts/main.py conversations scan hermes-agent --date 2026-05-20
 python scripts/main.py conversations scan all --date 2026-05-20
 python scripts/main.py candidates
@@ -86,6 +177,10 @@ The script handles deterministic work: copying OpenClaw daily files into Obsidia
 
 The current agent handles judgment work: candidate selection, summary, keywords, S1-S4 rating, process-memory classification, and duplicate/merge suggestions. Treat `rule_suggestion` as a hint only. The agent decision is the source of truth in review mode.
 
+### Conversation Archive Sources
+
+Conversation scanning is read-only against local agent stores. Codex scans both `CODEX_HOME/sessions/**/rollout-*.jsonl` and `CODEX_HOME/archived_sessions/rollout-*.jsonl`. Claude Code scans `CLAUDE_HOME/projects/**/*.jsonl`. OpenClaw scans curated `memory/.dreams/session-corpus/*.txt` only as source evidence. Hermes reads `HERMES_STATE_DB` or `HERMES_HOME/state.db`, and may fall back to `hermes sessions export -` if the SQLite path is missing or produces no conversations. OpenCode scans through `opencode export <session-id>` first and supplements missing session/day records from read-only `opencode.db` parsing. Qoder conversation scanning remains disabled by default because the local desktop state schema is not stable; use explicit handoff or future stable export support instead.
+
 ### Candidate Quality Gate
 
 This quality gate applies only to promotion into the memory index, memory cards, user profile, and shared context. It must not prevent raw source archiving. Keep OpenClaw daily copies, local conversation archives, handoff records, and personal knowledge files available as evidence first; then decide whether a segment deserves to become memory.
@@ -96,6 +191,8 @@ Discard by default:
 
 - routine heartbeat or self-check reports
 - "system normal", "gateway healthy", "redis running", "no errors", "all checks passed"
+- memory-sync housekeeping such as candidate counts, coverage summaries, review-pack paths, successful apply/status reports, and stage totals
+- temporary test-vault paths or one-off validation locations that do not describe a reusable setup
 - repeated overdue counters with no new decision, owner, deadline, or action
 - transient logs, raw tool outputs, dependency install noise, and status snapshots
 - same-day repetitions of an already captured topic
@@ -109,6 +206,8 @@ Keep status-like material only when it contains:
 - a todo, owner, deadline, blocker, or next action
 - a reusable lesson, command, API limit, workflow, or debugging path
 
+A memory-sync operational record is worth keeping only when it contains a reusable failure cause, correction, recovery method, validation rule, or design decision. A successful sync count or review status by itself is not a memory.
+
 Duplicate rule:
 
 - Same-day same-topic candidates must be merged.
@@ -117,7 +216,7 @@ Duplicate rule:
 - Use `merge_with` instead of creating another memory when the topic already exists.
 - If the new candidate only repeats a healthy/routine status, discard it instead of merging.
 
-Decision `reason` should name the value type or discard reason. Good keep reasons include `decision`, `lesson`, `correction`, `todo`, `state_change`, `knowledge`, and `user_rule`. Good discard reasons include `routine_status`, `duplicate_status`, `tool_noise`, `too_transient`, `no_future_value`, and `covered_by_existing_memory`.
+Decision `reason` should name the value type or discard reason. Good keep reasons include `decision`, `lesson`, `correction`, `todo`, `state_change`, `knowledge`, and `user_rule`. Good discard reasons include `routine_status`, `memory_sync_self_log`, `temporary_test_path`, `duplicate_operational_status`, `duplicate_status`, `tool_noise`, `too_transient`, `no_future_value`, and `covered_by_existing_memory`.
 
 ### 候选记忆质量门槛
 
@@ -129,6 +228,8 @@ Decision `reason` should name the value type or discard reason. Good keep reason
 
 - 日常心跳、自检、健康检查
 - “系统正常”“Gateway 健康”“Redis 正常运行”“无错误”“检查通过”
+- memory-sync 自身的候选数量、coverage、review pack 路径、apply 成功、status 汇总和阶段计数
+- 只服务于一次测试的临时 vault、测试文件路径或验证目录
 - 没有新决策、负责人、截止时间或行动项的重复逾期数字
 - 临时日志、原始工具输出、依赖安装噪声、普通状态快照
 - 同一天同主题的重复内容
@@ -142,6 +243,8 @@ Decision `reason` should name the value type or discard reason. Good keep reason
 - 待办、负责人、截止时间、阻塞点或下一步
 - 可复用的教训、命令、API 限制、工作流或排障路径
 
+memory-sync 运行记录只有在包含可复用的失败原因、纠正方法、恢复步骤、验证规则或设计决策时才值得保留。单纯“同步成功、候选多少、状态正常”不是记忆。
+
 重复规则：
 
 - 同一天同主题必须合并。
@@ -150,7 +253,7 @@ Decision `reason` should name the value type or discard reason. Good keep reason
 - 已有同主题记忆时使用 `merge_with`，不要创建新的 memory。
 - 如果新候选只是重复健康状态，直接丢弃，不要合并。
 
-`reason` 字段必须写明保留价值或丢弃原因。保留原因可以是 `decision`、`lesson`、`correction`、`todo`、`state_change`、`knowledge`、`user_rule`。丢弃原因可以是 `routine_status`、`duplicate_status`、`tool_noise`、`too_transient`、`no_future_value`、`covered_by_existing_memory`。
+`reason` 字段必须写明保留价值或丢弃原因。保留原因可以是 `decision`、`lesson`、`correction`、`todo`、`state_change`、`knowledge`、`user_rule`。丢弃原因可以是 `routine_status`、`memory_sync_self_log`、`temporary_test_path`、`duplicate_operational_status`、`duplicate_status`、`tool_noise`、`too_transient`、`no_future_value`、`covered_by_existing_memory`。
 
 ### Codex Conversation Review Rules
 
@@ -390,6 +493,16 @@ Personal/Agent Knowledge/<agent>/Agent Skills.md
 `Dashboard/Agent Skills.md` is the Obsidian navigation entry. `Personal/Agent Knowledge/Agent Skills.md` is the personal navigation entry. The detailed human-readable inventory is split by agent under `Personal/Agent Knowledge/<agent>/Agent Skills.md`, while `.memory-sync/agents/<agent>/skills.json` remains the machine-readable per-agent store.
 
 The skill inventory records skill name, function summary, agent, level/source directory, local path, modified time, hash, enabled state, and frontmatter validity. OpenClaw is scanned across official npm, workspace, and user skill directories so multi-level installations are not missed. Hermes is scanned from `HERMES_HOME/skills` and `%LOCALAPPDATA%/hermes/skills` on Windows. Markdown output language is inferred from the user's local profile/rules, or can be forced with `MEMORY_SYNC_LANGUAGE=zh` or `MEMORY_SYNC_LANGUAGE=en`.
+
+### Agent Skill Routing Index
+
+`skills sync` must generate `Personal/Agent Knowledge/<agent>/Agent Skills.md` as an Agent Skill routing index, not a flat name list. It helps the caller pick Skills by task category first, then compare candidate fit and exclusion rules inside one category entry. It does not replace each Skill's own `SKILL.md`; the final selected Skill must still be read before execution.
+
+The per-agent source of truth for routing metadata is `.memory-sync/agents/<agent>/skills.json`. The Markdown page is generated from that JSON and must contain these sections in order: `快速路由`, `分类匹配指南`, `冲突处理规则`, `完整 Skill 清单`, and `质量问题`.
+
+Route records should include `identity`, `primary_category`, `related_categories`, `use_when`, `avoid_when`, `specificity`, `routing_status`, `routing_confidence`, `routing_source`, and `routing_reviewed_sha256`. Preserve confirmed routing when the Skill `sha256` has not changed. Mark newly discovered Skills as `pending_review`; mark changed, disabled, weakly described, or invalid-frontmatter Skills as `needs_review`.
+
+Agent post-processing is optional and should be targeted. Review only `pending_review`, `needs_review`, or low-confidence entries, read the target Skill's full `SKILL.md`, then update both `.memory-sync/agents/<agent>/skills.json` and the generated Markdown. Do not rewrite confirmed unchanged entries. Do not invent exclusion rules; leave `avoid_when` empty when the Skill does not state a boundary. Add a new category only when existing stable categories cannot fit and the new category has reusable value beyond a single Skill.
 
 ## Trigger Logic
 

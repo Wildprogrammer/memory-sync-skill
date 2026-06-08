@@ -23,6 +23,48 @@ In one line:
 Remember first. Forget by disuse. Own the memory.
 ```
 
+## Product Positioning
+
+Memory Sync is not just a script, and it is not just an Obsidian backup.
+
+It is a local memory toolchain:
+
+```text
+Agent chats and memory signals
+        |
+        v
+Memory Sync Skill: preserve, review, index, promote, clean
+        |
+        v
+Obsidian: readable personal memory knowledge base
+        |
+        v
+Git / GitHub: versioned, portable memory asset
+        |
+        v
+Shared context for OpenClaw, Codex, Claude, OpenCode, Hermes, Qoder, and future agents
+```
+
+- **Skill**: orchestrates sync, prepares review packs, applies memory decisions, exports context, syncs skill inventories, and keeps cleanup safe.
+- **Obsidian**: acts as the human-readable memory console, with dashboards, source evidence, memory cards, user profile, and agent knowledge.
+- **Git/GitHub**: turns the vault into a versioned personal memory asset that can be backed up, reviewed, restored, and moved across machines.
+- **Agent adapters**: publish compact shared context so different agents can understand the same user faster.
+
+The goal is to turn agent conversations and working context into a personal knowledge base that is readable by humans, reusable by agents, and owned by the user.
+
+## 产品定位
+
+Memory Sync 不是单纯的脚本，也不是 Obsidian 备份工具。
+
+它是一条本地记忆工具链：
+
+- **Skill**：负责编排同步流程、准备候选记忆、应用 review 决策、导出上下文、同步技能清单，并保证清理动作安全。
+- **Obsidian**：作为人可读的记忆控制台，承载仪表盘、源证据、记忆卡片、用户画像和 agent 知识。
+- **Git/GitHub**：把记忆库变成可版本管理、可备份、可回滚、可迁移的个人资产。
+- **Agent 适配层**：输出精简共享上下文，让 OpenClaw、Codex、Claude、OpenCode、Hermes、Qoder 以及未来的 agent 更快理解同一个用户。
+
+它的目标是把 agent 对话和工作上下文沉淀成用户自己拥有的个人知识库：人能读，agent 能用，换工具也能带走。
+
 ## 中文简介
 
 不要再一遍遍给 Agent 解释你是谁、项目做到哪、上次踩过什么坑。
@@ -73,7 +115,7 @@ It can:
 
 - copy OpenClaw daily memory into an Obsidian working layer without editing the source
 - import OpenClaw recall, dreaming, and promoted memory candidates
-- archive local Codex, Claude, OpenClaw, and Hermes conversations as traceable evidence
+- archive local Codex, Claude, OpenClaw, OpenCode, and Hermes conversations as traceable evidence
 - preserve non-daily knowledge such as `MEMORY.md`, `USER.md`, `AGENTS.md`, and installed skill inventories
 - build `Dashboard/User Profile.md` from evidence-backed preferences, boundaries, projects, and decisions
 - export `Context/agent_brief.md` and adapter context for agent switching
@@ -142,9 +184,9 @@ Routine health checks, repeated status pings, transient logs, and low-value tool
 | Agent | Role |
 | --- | --- |
 | OpenClaw | Source memory, recall/dreaming candidates, session evidence, long-term promotion companion |
-| Codex | Local conversation archive, engineering handoff, project-state capture |
+| Codex | Local and archived conversation archive, engineering handoff, project-state capture |
 | Claude | Local conversation archive, long-context writing, reasoning, and handoff summaries |
-| OpenCode | Code-agent context portability |
+| OpenCode | Local conversation archive, code-agent context portability |
 | hermes-agent | Local SQLite conversation archive, installed skill inventory, handoff context |
 | Qoder | Explicit handoff and shared context portability while local chat schemas remain experimental |
 
@@ -192,7 +234,8 @@ Obsidian does not need to be running. The script writes Markdown and JSON files 
 - Added installed skill inventory sync under `.memory-sync/shared/agent_skills.json`, `.memory-sync/agents/<agent>/skills.json`, and `Personal/Agent Knowledge/Agent Skills.md`.
 - Added operating contracts for OpenClaw and hermes-agent context exports.
 - Added agent-assisted review mode: the current agent reviews candidate memories, while scripts prepare evidence and apply structured decisions.
-- Added readable conversation archives for Codex, Claude, OpenClaw, and Hermes local logs; archived conversations enter review before becoming memories.
+- Added readable conversation archives for Codex, Claude, OpenClaw, OpenCode, and Hermes local logs; archived conversations enter review before becoming memories.
+- Added Codex archived session scanning and OpenCode export/SQLite conversation capture.
 - Added stricter review grounding checks and read-only behavior for diagnostic context commands.
 - Added `Dashboard/Memory Directory.md` as a clean human navigation page without placeholder README links.
 

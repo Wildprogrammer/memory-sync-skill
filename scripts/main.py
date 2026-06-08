@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """OpenClaw memory sync with a single canonical index."""
 
@@ -280,6 +280,119 @@ HIGH_VALUE_PATTERNS = [
     r"后续",
     r"经验",
     r"教训",
+]
+
+OPERATIONAL_NOISE_PATTERNS: list[tuple[str, list[str]]] = [
+    (
+        "memory_sync_self_log",
+        [
+            r"\bmemory-sync\b.*\b(candidates?|coverage|review pack|sync complete|status|skipped=|s1\s*=|s2\s*=|s3\s*=|s4\s*=)\b",
+            r"\bagent review pack written\b",
+            r"\bpending review pack\b",
+            r"\breview apply success\b",
+            r"\bno rule-based memories were written\b",
+            r"\bcandidates:\s*\d+",
+            r"\bcoverage:\s*",
+            r"`?review apply`?.{0,80}(成功|added=|discarded=|merged=)",
+            r"`?status`?.{0,80}(正常|Memories=|S1=|S2=|S3=|S4=)",
+            r"(记忆同步|记忆库同步|记忆库每日同步).{0,160}(Candidates:|Coverage:|review apply|status|Memories=|S1=|S2=|added=|discarded=|同步完成|执行结果)",
+        ],
+    ),
+    (
+        "temporary_test_path",
+        [
+            r"memory-sync-(?:context-)?test",
+            r"test-vault",
+            r"\btemp[\\/]",
+            r"\btmp[\\/]",
+            r"测试文件位置",
+            r"临时验证",
+            r"临时测试",
+        ],
+    ),
+    (
+        "routine_status",
+        [
+            r"\bheartbeat\b.*\b(healthy|normal|ok|passed|success|no errors?|all checks passed)\b",
+            r"\b(gateway|redis|redis-server)\s+(healthy|normal|ok|running)\b",
+            r"\bsystem\s+(normal|healthy|ok)\b",
+            r"\b(no errors?|no exception|all checks passed)\b",
+            r"心跳.*(正常|健康|通过|无错误|无异常)",
+            r"自检.*(正常|健康|通过|无错误|无异常)",
+            r"Gateway\s*(healthy|正常|健康)",
+            r"Redis.*(运行正常|正常|健康)",
+            r"系统正常",
+            r"运行正常",
+            r"无错误",
+            r"无异常",
+            r"安全检查通过",
+            r"检查通过",
+        ],
+    ),
+    (
+        "duplicate_operational_status",
+        [
+            r"\boverdue\s*\d+\s*days?\b",
+            r"逾期\s*\d+\s*天",
+            r"Git\s*逾期\s*\d+\s*天",
+        ],
+    ),
+]
+
+DURABLE_VALUE_PATTERNS = [
+    r"\bdecision\b",
+    r"\bdecided\b",
+    r"\bcorrection\b",
+    r"\bcorrected\b",
+    r"\bwrong\b",
+    r"\bmistake\b",
+    r"\bfailed?\b",
+    r"\bfailure\b",
+    r"\broot cause\b",
+    r"\blesson\b",
+    r"\bfix(?:ed)?\b",
+    r"\bfallback\b",
+    r"\bworkaround\b",
+    r"\btimeout\b",
+    r"\bblocked?\b",
+    r"\btodo\b",
+    r"\bnext action\b",
+    r"\bmust\b",
+    r"\bnever\b",
+    r"\bshould\b",
+    r"\bchanged?\b",
+    r"\bconfigured?\b",
+    r"\brecovered?\b",
+    r"\brate[_ -]?limit\b",
+    r"\b429\b",
+    r"决定",
+    r"结论",
+    r"纠正",
+    r"搞错",
+    r"不对",
+    r"失败",
+    r"失败原因",
+    r"根因",
+    r"原因是",
+    r"教训",
+    r"修复",
+    r"已修复",
+    r"改成",
+    r"改为",
+    r"恢复",
+    r"验证恢复",
+    r"超时",
+    r"报错",
+    r"错误原因",
+    r"阻塞",
+    r"待办",
+    r"下一步",
+    r"约定",
+    r"必须",
+    r"不能",
+    r"应该",
+    r"用户要求",
+    r"用户纠正",
 ]
 
 GENERIC_WORDS = {
@@ -741,6 +854,314 @@ def contains_cjk(text: str) -> bool:
 
 def agent_skill_markdown_rel(agent: str) -> str:
     return f"{PERSONAL_KNOWLEDGE_DIR}/{agent}/Agent Skills.md"
+
+
+SKILL_ROUTING_CATEGORIES = [
+    {
+        "name": "开发与调试",
+        "name_en": "Development And Debugging",
+        "intro": "用于实现、修改、诊断或修复代码。先判断任务是平台专用、语言或框架专用、测试平台操作，还是通用故障诊断。",
+        "intro_en": "Use for implementing, changing, diagnosing, or fixing code. First decide whether the task is platform-specific, language/framework-specific, test-platform work, or general debugging.",
+        "priority": "平台专用 > 语言或框架专用 > 通用调试 > 通用开发",
+        "priority_en": "Platform-specific > language/framework-specific > general debugging > general development",
+        "skills": {"node-inspect-debugger", "python-debugpy", "vue-expert", "opencli-autofix", "opencli-explorer", "opencli-oneshot", "auto-test-platform"},
+        "keywords": ("debug", "fix", "code", "python", "node", "vue", "test", "测试", "调试", "修复", "代码"),
+    },
+    {
+        "name": "规划与任务执行",
+        "name_en": "Planning And Task Execution",
+        "intro": "用于拆解任务、验证方案、维护待办或运行长期任务流。先区分一次性方案验证、个人任务管理和持久化多阶段流程。",
+        "intro_en": "Use for decomposing tasks, validating approaches, maintaining todos, or running durable multi-step workflows.",
+        "priority": "专用工作流 > 持久任务编排 > 个人任务管理 > 临时方案验证",
+        "priority_en": "Dedicated workflow > durable orchestration > personal task management > temporary validation",
+        "skills": {"apple-reminders", "spike", "taskflow", "taskflow-inbox-triage", "things-mac", "trello"},
+        "keywords": ("task", "todo", "reminder", "workflow", "prototype", "validate", "计划", "任务", "待办", "验证"),
+    },
+    {
+        "name": "代码审查与质量",
+        "name_en": "Code Review And Quality",
+        "intro": "用于审查代码、处理 GitHub 问题、复核方案或约束编码质量。优先选择与代码平台或审查方法直接匹配的 Skill。",
+        "intro_en": "Use for reviewing code, handling GitHub issues, checking plans, or enforcing coding quality.",
+        "priority": "平台问题处理 > 专用审查器 > 编码规范",
+        "priority_en": "Platform issue handling > dedicated reviewer > coding guidelines",
+        "skills": {"gh-issues", "github", "oracle", "karpathy-skills"},
+        "keywords": ("review", "github", "issue", "pull request", "pr", "quality", "审查", "质量", "规范"),
+    },
+    {
+        "name": "Agent 与自动化编排",
+        "name_en": "Agent And Automation Orchestration",
+        "intro": "用于调用外部编码 Agent、组织多 Agent 团队、连接 MCP 工具或约束 Agent 执行流程。",
+        "intro_en": "Use for calling external coding agents, organizing multi-agent teams, connecting MCP tools, or constraining agent execution.",
+        "priority": "明确指定的 Agent > 专用委派器 > 团队编排 > 通用 Agent 行为",
+        "priority_en": "Explicit target agent > dedicated delegator > team orchestration > generic agent behavior",
+        "skills": {"coding-agent", "gemini", "mcporter", "cursor-agent", "proactive-agent", "using-superpowers", "Codex", "agent-team-orchestration", "codex-cli", "openai-codex-operator", "Claude Code CLI for OpenClaw"},
+        "keywords": ("agent", "codex", "claude", "gemini", "mcp", "delegate", "orchestrate", "自动化", "编排", "委派"),
+    },
+    {
+        "name": "搜索与研究",
+        "name_en": "Search And Research",
+        "intro": "用于网络搜索、网站信息检索、地点与天气查询、订阅监控和多格式内容摘要。先判断是否需要指定数据源或仅做摘要。",
+        "intro_en": "Use for web search, source-specific lookup, places/weather queries, feed monitoring, and multi-format summarization.",
+        "priority": "指定平台或数据源 > 智能搜索路由 > 通用网页搜索 > 摘要",
+        "priority_en": "Specified platform/source > smart search router > general web search > summarization",
+        "skills": {"blogwatcher", "goplaces", "summarize", "weather", "smart-search", "web-search"},
+        "keywords": ("search", "research", "summary", "summarize", "weather", "places", "搜索", "查询", "摘要", "研究"),
+    },
+    {
+        "name": "文档与知识管理",
+        "name_en": "Documents And Knowledge Management",
+        "intro": "用于创建、转换、编辑或管理文档、笔记与知识库。优先选择目标文件格式或目标平台专用 Skill。",
+        "intro_en": "Use for creating, converting, editing, or managing documents, notes, and knowledge bases.",
+        "priority": "目标平台专用 > 文件格式专用 > 通用转换",
+        "priority_en": "Target platform > file format > general conversion",
+        "skills": {"apple-notes", "bear-notes", "nano-pdf", "notion", "obsidian", "ai-ppt-generator", "docx", "markdown-converter", "pdf", "feishu-doc-best-practices"},
+        "keywords": ("document", "pdf", "docx", "markdown", "note", "notion", "obsidian", "文档", "知识", "笔记"),
+    },
+    {
+        "name": "数据与分析",
+        "name_en": "Data And Analysis",
+        "intro": "用于统计使用量、分析结构化数据或生成专项分析结果；不承接已有专业金融 Skill 能覆盖的任务。",
+        "intro_en": "Use for usage statistics, structured data analysis, or specialized analytical output when no domain skill is a better fit.",
+        "priority": "领域专用分析 > 数据源专用 > 通用统计",
+        "priority_en": "Domain analysis > source-specific analysis > general statistics",
+        "skills": {"model-usage"},
+        "keywords": ("data", "analysis", "usage", "stats", "analytics", "数据", "分析", "统计"),
+    },
+    {
+        "name": "图像与视觉设计",
+        "name_en": "Image And Visual Design",
+        "intro": "用于生成图表、界面设计、GIF、模因或视觉定位。先区分设计产出、媒体搜索和截图坐标识别。",
+        "intro_en": "Use for diagrams, UI design, GIFs, memes, or visual element location.",
+        "priority": "目标产物专用 > UI 设计 > 图像搜索或生成 > 视觉定位",
+        "priority_en": "Target output > UI design > image search/generation > visual locating",
+        "skills": {"canvas", "diagram-maker", "gifgrep", "meme-maker", "frontend-design", "screenshot-ui-locator"},
+        "keywords": ("image", "visual", "diagram", "gif", "meme", "ui", "screenshot", "图像", "视觉", "截图", "设计"),
+    },
+    {
+        "name": "音频与视频",
+        "name_en": "Audio And Video",
+        "intro": "用于音视频转录、语音合成、帧提取、摄像头采集和音频可视化。优先选择输入与输出格式完全匹配的 Skill。",
+        "intro_en": "Use for transcription, text-to-speech, frame extraction, camera capture, and audio visualization.",
+        "priority": "专用媒体操作 > 本地处理 > 云 API",
+        "priority_en": "Dedicated media operation > local processing > cloud API",
+        "skills": {"camsnap", "openai-whisper", "openai-whisper-api", "sag", "sherpa-onnx-tts", "songsee", "video-frames", "ai-notes-of-video"},
+        "keywords": ("audio", "video", "speech", "tts", "whisper", "frame", "camera", "音频", "视频", "语音", "转录"),
+    },
+    {
+        "name": "内容创作与运营",
+        "name_en": "Content Creation And Operations",
+        "intro": "用于短视频脚本、内容选题、预测复盘、平台发布和小红书运营。这是有复用价值的扩展大类。",
+        "intro_en": "Use for scripts, topic selection, content prediction/retro, publishing, and platform operations.",
+        "priority": "平台专用操作 > 已安装内容工作流子 Skill > 通用内容生成",
+        "priority_en": "Platform operation > installed content workflow > general content generation",
+        "skills": {"ai-video-script", "douyin-publish", "xhs-auth", "xhs-content-ops", "xhs-explore", "xhs-interact", "xhs-publish", "xiaohongshu-skills", "cheat-bump", "cheat-init", "cheat-learn-from", "cheat-migrate", "cheat-on-content", "cheat-predict", "cheat-publish", "cheat-recommend", "cheat-retro", "cheat-score", "cheat-score-blind", "cheat-seed", "cheat-shoot", "cheat-status", "cheat-trends"},
+        "keywords": ("content", "script", "publish", "video", "topic", "xhs", "douyin", "内容", "脚本", "发布", "选题", "小红书"),
+    },
+    {
+        "name": "通信与协作平台",
+        "name_en": "Communication And Collaboration",
+        "intro": "用于发送、读取或管理邮件、即时消息、工作区内容和社交平台交互。必须优先选择用户明确指定的平台。",
+        "intro_en": "Use for email, messaging, workspace content, and social-platform operations.",
+        "priority": "指定平台 > 指定消息类型 > 通用协作套件",
+        "priority_en": "Specified platform > message type > collaboration suite",
+        "skills": {"discord", "gog", "himalaya", "imsg", "slack", "voice-call", "wacli", "xurl"},
+        "keywords": ("mail", "message", "slack", "discord", "gmail", "calendar", "whatsapp", "x ", "邮件", "消息", "协作"),
+    },
+    {
+        "name": "浏览器与桌面操作",
+        "name_en": "Browser And Desktop Operations",
+        "intro": "用于浏览器自动化、桌面控制、远程控制和 macOS UI 操作。先判断目标是网页、桌面、远程设备还是截图定位。",
+        "intro_en": "Use for browser automation, desktop control, remote control, and macOS UI operations.",
+        "priority": "目标平台专用 > 浏览器会话自动化 > 桌面或远程控制 > 通用 UI 定位",
+        "priority_en": "Target platform > browser automation > desktop/remote control > UI locating",
+        "skills": {"peekaboo", "Agent Browser", "antigravity", "awesun-remote-control", "desktop-control", "opencli-browser", "opencli-usage"},
+        "keywords": ("browser", "desktop", "click", "screen", "remote", "网页", "浏览器", "桌面", "远程"),
+    },
+    {
+        "name": "DevOps 与系统运维",
+        "name_en": "DevOps And System Operations",
+        "intro": "用于终端会话、设备连接和系统级运行维护。涉及安全加固时转到“安全与凭证”。",
+        "intro_en": "Use for terminal sessions, device connection, and system operations. Security hardening belongs under security.",
+        "priority": "设备或平台专用 > 终端会话管理 > 通用运维",
+        "priority_en": "Device/platform-specific > terminal session management > general operations",
+        "skills": {"node-connect", "tmux"},
+        "keywords": ("devops", "system", "terminal", "tmux", "node", "ops", "系统", "终端", "运维"),
+    },
+    {
+        "name": "安全与凭证",
+        "name_en": "Security And Credentials",
+        "intro": "用于凭证管理、主机安全审计和系统加固。任何可能修改安全设置的操作都应先确认权限和影响。",
+        "intro_en": "Use for credential management, host security audit, and hardening. Confirm impact before changing security settings.",
+        "priority": "凭证专用 > 平台安全审计 > 通用加固",
+        "priority_en": "Credential-specific > platform audit > general hardening",
+        "skills": {"1password", "healthcheck"},
+        "keywords": ("secret", "password", "credential", "security", "audit", "凭证", "密码", "安全"),
+    },
+    {
+        "name": "金融与专业领域",
+        "name_en": "Finance And Professional Domains",
+        "intro": "用于金融数据、股票分析、模拟交易和专业金融 Agent。不得用通用数据分析替代已有领域 Skill。",
+        "intro_en": "Use for financial data, stock analysis, simulated trading, and specialized finance agents.",
+        "priority": "操作型专用 Skill > 数据源专用 > 分析模型 > 专家 Agent 集合",
+        "priority_en": "Operational skill > data-source skill > analytical model > expert-agent collection",
+        "skills": {"china-stock-analysis", "mx-moni", "agency-agents-finance", "mx_data", "mx_select_stock", "mx_selfselect"},
+        "keywords": ("finance", "stock", "trading", "investment", "金融", "股票", "交易", "投资"),
+    },
+    {
+        "name": "Skill 与插件管理",
+        "name_en": "Skill And Plugin Management",
+        "intro": "用于发现、创建、验证、安装或发布 Agent Skill，以及维护 Agent 的能力目录。",
+        "intro_en": "Use for finding, creating, validating, installing, publishing, and maintaining agent skills.",
+        "priority": "具体创建或发布工具 > Skill 发现 > 通用管理",
+        "priority_en": "Creation/publishing tool > skill discovery > general management",
+        "skills": {"clawhub", "skill-creator", "find-skills"},
+        "keywords": ("skill", "plugin", "clawhub", "publish", "install", "技能", "插件", "发布"),
+    },
+    {
+        "name": "记忆与上下文",
+        "name_en": "Memory And Context",
+        "intro": "用于检索历史会话、沉淀经验、同步记忆和迁移跨 Agent 上下文。先区分原始日志检索、持续改进和持久化记忆。",
+        "intro_en": "Use for historical session lookup, lessons, memory sync, and cross-agent context portability.",
+        "priority": "明确记忆同步 > 历史日志检索 > 纠错与持续改进",
+        "priority_en": "Explicit memory sync > session-log lookup > correction and improvement",
+        "skills": {"session-logs", "memory-sync", "self-improvement"},
+        "keywords": ("memory", "context", "session", "history", "improvement", "记忆", "上下文", "历史", "复盘"),
+    },
+    {
+        "name": "其他专用能力",
+        "name_en": "Other Specialized Capabilities",
+        "intro": "用于智能家居、媒体播放、外卖订单等无法稳定归入其他大类的设备或服务专用操作。",
+        "intro_en": "Use for device or service-specific operations that do not fit stable reusable categories.",
+        "priority": "用户明确指定的设备或服务 > 最窄能力边界",
+        "priority_en": "Explicit device/service > narrowest boundary",
+        "skills": {"blucli", "eightctl", "openhue", "ordercli", "sonoscli", "spotify-player"},
+        "keywords": ("device", "speaker", "music", "order", "home", "设备", "音箱", "订单", "家居"),
+    },
+]
+
+SKILL_ROUTING_FIELD_NAMES = (
+    "identity",
+    "primary_category",
+    "related_categories",
+    "use_when",
+    "avoid_when",
+    "specificity",
+    "routing_status",
+    "routing_confidence",
+    "routing_source",
+    "routing_reviewed_sha256",
+)
+
+
+def skill_route_identity(agent: str, record: dict[str, Any]) -> str:
+    return f"{agent}|{record.get('level', '')}|{record.get('relative_path', '')}"
+
+
+def skill_route_has_valid_fields(record: dict[str, Any]) -> bool:
+    return bool(record.get("identity") and record.get("primary_category") and record.get("routing_status"))
+
+
+def skill_route_category_for_name(name: str) -> dict[str, Any] | None:
+    for category in SKILL_ROUTING_CATEGORIES:
+        if name in category["skills"]:
+            return category
+    return None
+
+
+def classify_skill_route(record: dict[str, Any]) -> tuple[dict[str, Any], list[str], float, str]:
+    category = skill_route_category_for_name(str(record.get("name", "")))
+    description = str(record.get("description", ""))
+    haystack = f"{record.get('name', '')} {description} {record.get('relative_path', '')}".lower()
+    best_score = 0
+    best_category: dict[str, Any] | None = category
+    if category is None:
+        for candidate in SKILL_ROUTING_CATEGORIES:
+            score = sum(1 for keyword in candidate["keywords"] if keyword.lower() in haystack)
+            if score > best_score:
+                best_score = score
+                best_category = candidate
+    if best_category is None:
+        best_category = SKILL_ROUTING_CATEGORIES[-1]
+        confidence = 0.35
+    elif category is not None:
+        confidence = 0.84
+    else:
+        confidence = min(0.78, 0.42 + best_score * 0.12)
+
+    related: list[str] = []
+    lowered_name = str(record.get("name", "")).lower()
+    if "codex" in lowered_name or "claude" in lowered_name or "coding" in haystack:
+        for rel in ("开发与调试", "代码审查与质量"):
+            if rel != best_category["name"] and rel not in related:
+                related.append(rel)
+    if "memory" in haystack and best_category["name"] != "记忆与上下文":
+        related.append("记忆与上下文")
+    if "document" in haystack or "markdown" in haystack or "obsidian" in haystack:
+        if best_category["name"] != "文档与知识管理":
+            related.append("文档与知识管理")
+
+    specificity = "general"
+    if any(token in haystack for token in ("github", "obsidian", "slack", "discord", "notion", "codex", "claude", "xhs", "douyin")):
+        specificity = "platform"
+    elif any(token in haystack for token in ("python", "node", "vue", "pdf", "docx", "whisper")):
+        specificity = "format_or_framework"
+    elif best_category["name"] in {"金融与专业领域", "内容创作与运营", "记忆与上下文"}:
+        specificity = "domain"
+
+    return best_category, related, confidence, specificity
+
+
+def route_skill_records(agent: str, records: list[dict[str, Any]], previous_records: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    previous_records = previous_records or []
+    previous_by_identity = {
+        str(record.get("identity") or skill_route_identity(agent, record)): record
+        for record in previous_records
+    }
+    has_previous = bool(previous_by_identity)
+    routed: list[dict[str, Any]] = []
+    for record in records:
+        item = dict(record)
+        identity = skill_route_identity(agent, item)
+        item["identity"] = identity
+        previous = previous_by_identity.get(identity)
+        category, related, confidence, specificity = classify_skill_route(item)
+        description = str(item.get("description", "")).strip()
+        weak_description = not description or description == "|" or description == "No description provided."
+
+        if previous and str(previous.get("sha256")) == str(item.get("sha256")) and skill_route_has_valid_fields(previous):
+            for field in SKILL_ROUTING_FIELD_NAMES:
+                if field in previous:
+                    item[field] = previous[field]
+            item["identity"] = identity
+        else:
+            if previous and skill_route_has_valid_fields(previous):
+                item["primary_category"] = previous.get("primary_category") or category["name"]
+                item["related_categories"] = list(previous.get("related_categories") or related)
+                previous_use_when = list(previous.get("use_when") or [])
+                item["use_when"] = previous_use_when or ([compact_text(description, 180)] if description else [])
+                item["avoid_when"] = list(previous.get("avoid_when") or [])
+                item["specificity"] = previous.get("specificity") or specificity
+                item["routing_status"] = "needs_review"
+                item["routing_confidence"] = min(float(previous.get("routing_confidence") or confidence), 0.65)
+                item["routing_source"] = "preserved"
+                item["routing_reviewed_sha256"] = previous.get("routing_reviewed_sha256") or previous.get("sha256", "")
+            else:
+                item["primary_category"] = category["name"]
+                item["related_categories"] = related
+                item["use_when"] = [compact_text(description, 180)] if description and description != "|" else []
+                item["avoid_when"] = []
+                item["specificity"] = specificity
+                if weak_description or not item.get("frontmatter_valid", True):
+                    item["routing_status"] = "needs_review"
+                elif has_previous:
+                    item["routing_status"] = "pending_review"
+                else:
+                    item["routing_status"] = "rule_suggested"
+                item["routing_confidence"] = round(confidence, 2)
+                item["routing_source"] = "rule"
+                item["routing_reviewed_sha256"] = ""
+        routed.append(item)
+    return routed
 
 
 def parse_skill_frontmatter(text: str) -> tuple[dict[str, str], bool]:
@@ -1209,12 +1630,15 @@ def first_title(content: str) -> str:
 
 
 def noise_reason_for_text(text: str) -> str | None:
+    reason = blacklist_reason_for_text(text)
+    if reason:
+        return reason
     if classify_process_memory(text):
-        return blacklist_reason_for_text(text)
+        return None
     compact = re.sub(r"\s+", "", text)
     if len(compact) < MIN_COMPACT_LENGTH:
         return "too_short"
-    return blacklist_reason_for_text(text)
+    return None
 
 
 def pattern_reason(patterns: list[str], text: str, prefix: str) -> str | None:
@@ -1229,13 +1653,42 @@ def high_value_reason_for_text(text: str) -> str | None:
     return pattern_reason(HIGH_VALUE_PATTERNS, text, "high_value")
 
 
+def durable_value_reason_for_text(text: str) -> str | None:
+    return pattern_reason(DURABLE_VALUE_PATTERNS, text, "durable_value")
+
+
+def operational_noise_reason_for_text(text: str) -> str | None:
+    for reason, patterns in OPERATIONAL_NOISE_PATTERNS:
+        if pattern_reason(patterns, text, reason):
+            return reason
+    return None
+
+
+def memory_sync_failure_lesson_reason_for_text(text: str) -> str | None:
+    patterns = [
+        r"\bmemory-sync\s+(review|sync|index|profile|context|candidate|source|apply).{0,100}\b(failed|failure|error|invalid|bug|regression|root cause)\b",
+        r"\bmemory-sync\s+(review|sync|index|profile|context|candidate|source|apply).{0,100}\bfix(?:ed)?\b.{0,100}\b(review apply|sync|index|source_file|source_anchor|candidate|profile|context)\b",
+        r"(记忆同步|记忆库同步).{0,100}(失败|报错|错误原因|根因|回归)",
+        r"(记忆同步|记忆库同步).{0,100}修复.{0,100}(索引|候选|来源|source|anchor|profile|context)",
+    ]
+    return pattern_reason(patterns, text, "memory_sync_failure_lesson")
+
+
 def blacklist_reason_for_text(text: str) -> str | None:
     high_value = high_value_reason_for_text(text)
+    durable_value = durable_value_reason_for_text(text)
+    operational_reason = operational_noise_reason_for_text(text)
+    if operational_reason == "memory_sync_self_log":
+        if memory_sync_failure_lesson_reason_for_text(text):
+            return None
+        return operational_reason
+    if operational_reason and not durable_value:
+        return operational_reason
     hard_reason = pattern_reason(BLACKLIST_PATTERNS, text, "blacklist")
-    if hard_reason and not high_value:
+    if hard_reason and not (high_value or durable_value):
         return hard_reason
     soft_reason = pattern_reason(SOFT_BLACKLIST_PATTERNS, text, "soft_blacklist")
-    if soft_reason and not high_value:
+    if soft_reason and not durable_value:
         return soft_reason
     return None
 
@@ -2115,6 +2568,18 @@ class MemorySync:
                             "source_anchor": str(memory.get("source_anchor", "")),
                             "title_hint": str(memory.get("title", ""))[:80],
                             "reason": "already_indexed_candidate_uid",
+                            "high_value_reason": high_value_reason_for_text(body) or "",
+                        }
+                    )
+                    continue
+                reason = blacklist_reason_for_text(memory_blob(memory) or body)
+                if reason:
+                    skipped.append(
+                        {
+                            "source_file": str(memory.get("source_file", "")),
+                            "source_anchor": str(memory.get("source_anchor", "")),
+                            "title_hint": str(memory.get("title", ""))[:80],
+                            "reason": reason,
                             "high_value_reason": high_value_reason_for_text(body) or "",
                         }
                     )
@@ -3733,6 +4198,17 @@ class MemorySync:
         lines.extend(["", "## Optional Dataview", "", "```dataview", f'TABLE stage, source_agent, expire_at FROM "{MEMORY_PAGES_DIR}" SORT stage DESC', "```", ""])
         self.write_text_atomic(self.vault_path / MEMORY_DASHBOARD_FILE, "\n".join(lines).rstrip() + "\n")
 
+    def recent_markdown_links(self, root_rel: str, limit: int = 20) -> list[str]:
+        root = self.vault_path / root_rel
+        if not root.exists():
+            return []
+        files = sorted(
+            [path for path in root.rglob("*.md") if path.is_file()],
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        return [self.vault_rel(path) for path in files[:limit]]
+
     def cleanup_generated_directory_readmes(self) -> None:
         for path in self.vault_path.rglob("README.md"):
             if not path.is_file():
@@ -3785,15 +4261,15 @@ class MemorySync:
             context_label = "Cross-Agent Context"
             personal_label = "Personal Knowledge"
             dashboard_rows = [
-                (PROFILE_MD_FILE, PROFILE_MD_FILE, "Dynamic user profile for preferences, project background, and collaboration boundaries."),
-                (REFERENCE_AGENT_SKILLS_MD_FILE, REFERENCE_AGENT_SKILLS_MD_FILE, "Synced skill capability overview so agents know which tools are available."),
+                (PROFILE_MD_FILE, "User Profile", "Dynamic user profile for preferences, project background, and collaboration boundaries."),
+                (REFERENCE_AGENT_SKILLS_MD_FILE, "Agent Skills", "Synced skill capability overview so agents know which tools are available."),
             ]
             memory_directory_rows = [
-                (OBSIDIAN_INDEX_FILE, OBSIDIAN_INDEX_FILE, "Enter memories, stages, and source trace links here."),
-                (MEMORY_DASHBOARD_FILE, MEMORY_DASHBOARD_FILE, "View memory counts, stage distribution, and shared-memory overview."),
+                (OBSIDIAN_INDEX_FILE, "Memory Summary Index", "Enter memories, stages, and source trace links here."),
+                (MEMORY_DASHBOARD_FILE, "Memory Dashboard", "View memory counts, stage distribution, and shared-memory overview."),
             ]
             context_rows = [
-                (f"{SHARED_CONTEXT_DIR}/agent_brief.md", f"{SHARED_CONTEXT_DIR}/agent_brief.md", "Portable brief for agent switching and handoff."),
+                (f"{SHARED_CONTEXT_DIR}/agent_brief.md", "Cross-Agent Overview", "Portable brief for agent switching and handoff."),
             ]
             personal_rows = [
                 (AGENT_SKILLS_MD_FILE, "Personal/Agent Knowledge/Agent Skills.md", "Personal Agent Skill index.", True),
@@ -4115,10 +4591,25 @@ class MemorySync:
 
     def write_skill_inventory(self) -> dict[str, Any]:
         inventory = self.collect_skill_inventory()
-        self.write_json_atomic(self.vault_path / SHARED_AGENT_SKILLS_JSON, inventory)
         by_agent: dict[str, list[dict[str, Any]]] = {}
         for record in inventory["skills"]:
             by_agent.setdefault(str(record.get("agent")), []).append(record)
+        for agent, records in list(by_agent.items()):
+            previous_path = self.agent_state_dir(agent) / "skills.json"
+            previous_records: list[dict[str, Any]] = []
+            if previous_path.exists():
+                try:
+                    previous_payload = json.loads(previous_path.read_text(encoding="utf-8"))
+                    previous_records = list(previous_payload.get("skills", []))
+                except (json.JSONDecodeError, OSError, TypeError):
+                    previous_records = []
+            by_agent[agent] = route_skill_records(agent, records, previous_records)
+        inventory["skills"] = [
+            record
+            for agent in sorted(by_agent)
+            for record in by_agent[agent]
+        ]
+        self.write_json_atomic(self.vault_path / SHARED_AGENT_SKILLS_JSON, inventory)
         for agent, records in by_agent.items():
             self.write_json_atomic(
                 self.agent_state_dir(agent) / "skills.json",
@@ -4170,6 +4661,154 @@ class MemorySync:
         if language == "zh" and not contains_cjk(description):
             return f"原始说明：{description}"
         return description
+
+    def group_skills_by_route_category(self, records: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        fallback = SKILL_ROUTING_CATEGORIES[-1]["name"]
+        for record in records:
+            category = str(record.get("primary_category") or fallback)
+            grouped.setdefault(category, []).append(record)
+        for items in grouped.values():
+            items.sort(key=lambda item: (str(item.get("routing_status")), str(item.get("name")), str(item.get("level")), str(item.get("relative_path"))))
+        return grouped
+
+    def skill_route_status_label(self, record: dict[str, Any], language: str) -> str:
+        status = str(record.get("routing_status") or "needs_review")
+        if language == "zh":
+            return {
+                "confirmed": "已确认",
+                "pending_review": "新增待复核",
+                "needs_review": "需要复核",
+                "rule_suggested": "规则建议",
+            }.get(status, status)
+        return {
+            "confirmed": "confirmed",
+            "pending_review": "pending review",
+            "needs_review": "needs review",
+            "rule_suggested": "rule suggested",
+        }.get(status, status)
+
+    def skill_route_use_when_text(self, record: dict[str, Any], language: str) -> str:
+        values = [str(value).strip() for value in record.get("use_when", []) if str(value).strip()]
+        if values:
+            return "；".join(values) if language == "zh" else "; ".join(values)
+        return self.skill_description_for_language(record, language)
+
+    def skill_route_avoid_when_text(self, record: dict[str, Any], language: str) -> str:
+        values = [str(value).strip() for value in record.get("avoid_when", []) if str(value).strip()]
+        if values:
+            return "；".join(values) if language == "zh" else "; ".join(values)
+        status = str(record.get("routing_status") or "")
+        description = str(record.get("description") or "").strip()
+        if language == "zh":
+            if status == "pending_review":
+                return "新增 Skill，边界和触发条件需读取完整 `SKILL.md` 后确认。"
+            if not description or description == "|":
+                return "描述不可用，禁止仅凭名称路由。"
+            return "分类级排除规则适用；边界不清时读取完整 `SKILL.md`。"
+        if status == "pending_review":
+            return "New Skill; read the full `SKILL.md` before confirming boundaries."
+        if not description or description == "|":
+            return "Description unavailable; do not route by name alone."
+        return "Use category-level exclusion rules; read the full `SKILL.md` when boundaries are unclear."
+
+    def skill_full_list_lines(self, record: dict[str, Any], language: str) -> list[str]:
+        if language == "zh":
+            return [
+                f"### {record.get('name')} · {record.get('level')} · {record.get('relative_path')}",
+                "",
+                f"- 功能简介：{self.skill_description_for_language(record, language)}",
+                f"- 主要分类：{record.get('primary_category', '待复核')}",
+                f"- 相关分类：{'、'.join(record.get('related_categories') or []) or '未声明'}",
+                f"- 路由状态：{self.skill_route_status_label(record, language)}",
+                f"- 来源层级：`{record.get('level')}`",
+                f"- 相对路径：`{record.get('relative_path')}`",
+                f"- 本机路径：`{record.get('path')}`",
+                f"- 修改时间：{record.get('last_modified')}",
+                f"- SHA256：`{record.get('sha256')}`",
+                f"- 状态：{'启用' if record.get('enabled') else '禁用'}；frontmatter {'有效' if record.get('frontmatter_valid') else '可能缺失'}",
+                "",
+            ]
+        return [
+            f"### {record.get('name')} · {record.get('level')} · {record.get('relative_path')}",
+            "",
+            f"- Summary: {self.skill_description_for_language(record, language)}",
+            f"- Primary category: {self.skill_category_label(record.get('primary_category'), language)}",
+            f"- Related categories: {', '.join(self.skill_category_label(item, language) for item in (record.get('related_categories') or [])) or 'Not declared'}",
+            f"- Routing status: {self.skill_route_status_label(record, language)}",
+            f"- Level: `{record.get('level')}`",
+            f"- Relative path: `{record.get('relative_path')}`",
+            f"- Local path: `{record.get('path')}`",
+            f"- Modified: {record.get('last_modified')}",
+            f"- SHA256: `{record.get('sha256')}`",
+            f"- State: {'enabled' if record.get('enabled') else 'disabled'}; frontmatter {'valid' if record.get('frontmatter_valid') else 'may be missing'}",
+            "",
+        ]
+
+    def skill_category_label(self, category_name: Any, language: str) -> str:
+        if language == "zh":
+            return str(category_name or "待复核")
+        for category in SKILL_ROUTING_CATEGORIES:
+            if category["name"] == category_name:
+                return str(category["name_en"])
+        return "Needs Review"
+
+    def skill_quality_issue_lines(self, records: list[dict[str, Any]], language: str) -> list[str]:
+        counts = Counter(str(record.get("name")) for record in records)
+        duplicates = sorted(name for name, count in counts.items() if count > 1)
+        invalid = [record for record in records if not record.get("frontmatter_valid")]
+        weak = [
+            record
+            for record in records
+            if not str(record.get("description") or "").strip()
+            or str(record.get("description") or "").strip() == "|"
+            or str(record.get("description") or "").strip() == "No description provided."
+        ]
+        disabled = [record for record in records if not record.get("enabled")]
+        pending = [record for record in records if record.get("routing_status") == "pending_review"]
+        review = [record for record in records if record.get("routing_status") == "needs_review"]
+        low_confidence = [record for record in records if float(record.get("routing_confidence") or 0) < 0.6]
+
+        def items(values: list[dict[str, Any]]) -> str:
+            if not values:
+                return "无" if language == "zh" else "None"
+            return ("、" if language == "zh" else ", ").join(
+                f"{record.get('name')}（{record.get('level')}:{record.get('relative_path')}）" if language == "zh"
+                else f"{record.get('name')} ({record.get('level')}:{record.get('relative_path')})"
+                for record in values
+            )
+
+        if language == "zh":
+            return [
+                "## 质量问题",
+                "",
+                "> 本节只报告影响 Skill 路由可靠性的问题，不自动修改原 Skill。",
+                "",
+                f"- 同名 Skill：{'、'.join(duplicates) if duplicates else '无'}。必须使用 `level + relative_path` 区分。",
+                f"- frontmatter 可能缺失：{items(invalid)}。",
+                f"- description 无法用于路由：{items(weak)}。",
+                f"- 已禁用 Skill：{items(disabled)}。",
+                f"- 新增待复核 Skill：{items(pending)}。",
+                f"- 需要复核 Skill：{items(review)}。",
+                f"- 低置信度分类：{items(low_confidence)}。",
+                "- 当前 description 在机器索引中可能被截断；遇到边界不清、适用条件冲突或排除条件缺失时，必须读取原始 `SKILL.md`。",
+                "",
+            ]
+        return [
+            "## Quality Issues",
+            "",
+            "> This section reports routing reliability issues only; it does not modify original Skills.",
+            "",
+            f"- Duplicate names: {', '.join(duplicates) if duplicates else 'None'}. Distinguish with `level + relative_path`.",
+            f"- Frontmatter may be missing: {items(invalid)}.",
+            f"- Description unusable for routing: {items(weak)}.",
+            f"- Disabled Skills: {items(disabled)}.",
+            f"- Pending review Skills: {items(pending)}.",
+            f"- Needs review Skills: {items(review)}.",
+            f"- Low-confidence categories: {items(low_confidence)}.",
+            "- Descriptions in the machine index may be truncated; read the original `SKILL.md` when boundaries are unclear.",
+            "",
+        ]
 
     def agent_skill_index_markdown(self, by_agent: dict[str, list[dict[str, Any]]], inventory: dict[str, Any]) -> str:
         language = self.preferred_language()
@@ -4233,59 +4872,145 @@ class MemorySync:
         machine_index = f"{STATE_AGENTS_DIR}/{agent}/skills.json"
         if language == "zh":
             lines = [
-                f"# {agent} Skill 清单",
+                f"# {agent} Skill 路由索引",
                 "",
-                "> 自动生成。此文件属于个人知识库，可能包含本机路径。",
+                "> 自动生成的 Skill 匹配辅助索引。它帮助 Agent 缩小候选范围，但不替代各 Skill 自身的 `SKILL.md`；最终执行前必须读取被选中 Skill 的完整说明。",
                 "",
                 f"- 生成时间：{generated_at}",
                 f"- Agent：{agent}",
                 f"- Skill 数量：{len(records)}",
                 f"- 机器索引：`{machine_index}`",
                 "",
+                "## 快速路由",
+                "",
+                "> 先判断任务所属大类，再进入唯一分类入口比较候选 Skill。不要从完整清单中仅凭名称直接选择。",
+                "",
             ]
-            for record in records:
-                status = "" if record.get("enabled") else "（已禁用）"
-                valid = "" if record.get("frontmatter_valid") else "（frontmatter 可能缺失）"
+            grouped = self.group_skills_by_route_category(records)
+            for category in SKILL_ROUTING_CATEGORIES:
+                items = grouped.get(category["name"], [])
+                if items:
+                    lines.append(f"- [[#{category['name']}|{category['name']}]]：{category['intro'].split('。')[0]}。")
+            lines.extend(["", "## 分类匹配指南", ""])
+            for category in SKILL_ROUTING_CATEGORIES:
+                items = grouped.get(category["name"], [])
+                if not items:
+                    continue
                 lines.extend(
                     [
-                        f"## {record.get('name')}{status}{valid}",
+                        f"### {category['name']}",
                         "",
-                        f"- 功能简介：{self.skill_description_for_language(record, language)}",
-                        f"- 来源层级：`{record.get('level')}`",
-                        f"- 相对路径：`{record.get('relative_path')}`",
-                        f"- 本机路径：`{record.get('path')}`",
-                        f"- 修改时间：{record.get('last_modified')}",
+                        f"> 入口说明：{category['intro']}",
+                        "",
+                        f"优先级：{category['priority']}。",
+                        "",
+                        "候选 Skill：",
                         "",
                     ]
                 )
+                for record in items:
+                    disabled = "" if record.get("enabled") else "，已禁用"
+                    lines.extend(
+                        [
+                            f"- **{record.get('name')}**（`{record.get('level')}:{record.get('relative_path')}`{disabled}）",
+                            f"  - 适用：{self.skill_route_use_when_text(record, language)}",
+                            f"  - 排除：{self.skill_route_avoid_when_text(record, language)}",
+                            f"  - 路由状态：{self.skill_route_status_label(record, language)}。",
+                        ]
+                    )
+                lines.append("")
+            lines.extend(
+                [
+                    "## 冲突处理规则",
+                    "",
+                    "1. 优先选择主要分类与当前任务完全一致的 Skill。",
+                    "2. 同一分类内按“平台专用 > 语言、框架或格式专用 > 领域专用 > 通用能力”排序。",
+                    "3. 同名 Skill 不按名称合并；使用 `level + relative_path` 区分，并优先读取当前 Agent 实际加载层级的版本。",
+                    "4. 描述、路径或启用状态冲突时，以目标 Skill 的完整 `SKILL.md` 和 Agent 当前加载规则为准。",
+                    "5. 只有任务确实跨越多个独立阶段时才组合多个 Skill；同一阶段不要同时调用能力重叠的通用 Skill。",
+                    "6. `description` 缺失、为 `|`、被截断或 frontmatter 无效时，不允许自动确认路由，应进入质量问题等待复核。",
+                    "7. 已确认且 `sha256` 未变化的路由信息应保留；新增 Skill 或哈希变化的 Skill 才需要 AI 重新检查。",
+                    "",
+                    "## 完整 Skill 清单",
+                    "",
+                    "> 以下清单用于审计和追溯。路由时先使用上面的分类入口；这里保留原始说明、来源层级和本机路径。",
+                    "",
+                ]
+            )
+            for record in records:
+                lines.extend(self.skill_full_list_lines(record, language))
+            lines.extend(self.skill_quality_issue_lines(records, language))
             return "\n".join(lines).rstrip() + "\n"
 
         lines = [
-            f"# {agent} Skills",
+            f"# {agent} Skill Routing Index",
             "",
-            "> Auto-generated. This file belongs to the personal knowledge base and may include local paths.",
+            "> Auto-generated Skill matching index. It helps agents narrow candidates, but it does not replace each Skill's own `SKILL.md`; read the selected Skill before execution.",
             "",
             f"- Generated: {generated_at}",
             f"- Agent: {agent}",
             f"- Skills: {len(records)}",
             f"- Machine index: `{machine_index}`",
             "",
+            "## Quick Routing",
+            "",
+            "> Choose the task category first, then compare candidate Skills inside that single entry. Do not pick from the full list by name alone.",
+            "",
         ]
-        for record in records:
-            status = "" if record.get("enabled") else " (disabled)"
-            valid = "" if record.get("frontmatter_valid") else " (frontmatter may be missing)"
+        grouped = self.group_skills_by_route_category(records)
+        for category in SKILL_ROUTING_CATEGORIES:
+            items = grouped.get(category["name"], [])
+            if items:
+                lines.append(f"- [[#{category['name_en']}|{category['name_en']}]]: {category['intro_en'].split('.')[0]}.")
+        lines.extend(["", "## Category Matching Guide", ""])
+        for category in SKILL_ROUTING_CATEGORIES:
+            items = grouped.get(category["name"], [])
+            if not items:
+                continue
             lines.extend(
                 [
-                    f"## {record.get('name')}{status}{valid}",
+                    f"### {category['name_en']}",
                     "",
-                    f"- Summary: {self.skill_description_for_language(record, language)}",
-                    f"- Level: `{record.get('level')}`",
-                    f"- Relative path: `{record.get('relative_path')}`",
-                    f"- Local path: `{record.get('path')}`",
-                    f"- Modified: {record.get('last_modified')}",
+                    f"> Entry note: {category['intro_en']}",
+                    "",
+                    f"Priority: {category['priority_en']}.",
+                    "",
+                    "Candidate Skills:",
                     "",
                 ]
             )
+            for record in items:
+                disabled = "" if record.get("enabled") else ", disabled"
+                lines.extend(
+                    [
+                        f"- **{record.get('name')}** (`{record.get('level')}:{record.get('relative_path')}`{disabled})",
+                        f"  - Use when: {self.skill_route_use_when_text(record, language)}",
+                        f"  - Avoid when: {self.skill_route_avoid_when_text(record, language)}",
+                        f"  - Routing status: {self.skill_route_status_label(record, language)}.",
+                    ]
+                )
+            lines.append("")
+        lines.extend(
+            [
+                "## Conflict Rules",
+                "",
+                "1. Prefer the Skill whose primary category exactly matches the task.",
+                "2. Within a category, prefer platform-specific Skills, then language/framework/format-specific Skills, then domain-specific Skills, then generic Skills.",
+                "3. Do not merge same-name Skills by name; distinguish them with `level + relative_path` and prefer the version actually loaded by the current agent.",
+                "4. If description, path, or enabled state conflicts, trust the target Skill's full `SKILL.md` and the current agent's loading rules.",
+                "5. Combine multiple Skills only when the task truly crosses independent phases.",
+                "6. Missing, `|`, truncated, or invalid frontmatter descriptions require review before route confirmation.",
+                "7. Keep confirmed routing when `sha256` is unchanged; newly added or changed Skills need agent review.",
+                "",
+                "## Complete Skill List",
+                "",
+                "> This list is for audit and traceability. Route from the category entries above first.",
+                "",
+            ]
+        )
+        for record in records:
+            lines.extend(self.skill_full_list_lines(record, language))
+        lines.extend(self.skill_quality_issue_lines(records, language))
         return "\n".join(lines).rstrip() + "\n"
 
     def sync_personal_knowledge_base(self) -> None:
@@ -5153,11 +5878,42 @@ class MemorySync:
     def qoder_home(self) -> Path:
         return expand_path(str(CONFIG["QODER_HOME"]))
 
+    def opencode_command(self) -> str:
+        return shutil.which("opencode") or shutil.which("opencode.cmd") or "opencode"
+
+    def opencode_db_path(self) -> Path:
+        configured = os.environ.get("OPENCODE_DB_PATH", "").strip()
+        if configured:
+            return expand_path(configured)
+        try:
+            result = subprocess.run(
+                [self.opencode_command(), "db", "path"],
+                cwd=str(ROOT),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=30,
+            )
+        except (OSError, subprocess.SubprocessError):
+            result = None
+        if result and result.stdout.strip():
+            return expand_path(result.stdout.strip().splitlines()[0])
+        return Path.home() / ".local" / "share" / "opencode" / "opencode.db"
+
     def codex_rollout_files(self) -> list[Path]:
-        sessions = self.codex_home() / "sessions"
-        if not sessions.exists():
-            return []
-        return sorted(sessions.rglob("rollout-*.jsonl"))
+        roots = [
+            self.codex_home() / "sessions",
+            self.codex_home() / "archived_sessions",
+        ]
+        files: dict[str, Path] = {}
+        for root in roots:
+            if not root.exists():
+                continue
+            for path in root.rglob("rollout-*.jsonl"):
+                files[str(path.resolve()).lower()] = path
+        return sorted(files.values())
 
     def claude_project_files(self) -> list[Path]:
         projects = self.claude_home() / "projects"
@@ -5551,6 +6307,374 @@ class MemorySync:
 
         return {key: value for key, value in conversations.items() if value.get("events")}
 
+    def opencode_session_ids_from_cli(self) -> list[str]:
+        try:
+            result = subprocess.run(
+                [self.opencode_command(), "session", "list", "--format", "json"],
+                cwd=str(ROOT),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=60,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            self.log(f"OpenCode session list unavailable: {exc}")
+            return []
+        if not result.stdout.strip():
+            if result.stderr.strip():
+                self.log(f"OpenCode session list returned no JSON: {compact_text(result.stderr, 180)}")
+            return []
+        try:
+            payload = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            self.log(f"OpenCode session list JSON parse failed: {exc}")
+            return []
+        if not isinstance(payload, list):
+            return []
+        ids: list[str] = []
+        for item in payload:
+            if isinstance(item, dict) and item.get("id"):
+                ids.append(str(item["id"]))
+        return ids
+
+    def opencode_export_session(self, session_id: str) -> dict[str, Any] | None:
+        try:
+            result = subprocess.run(
+                [self.opencode_command(), "export", session_id],
+                cwd=str(ROOT),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=120,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            self.log(f"OpenCode export unavailable for {session_id}: {exc}")
+            return None
+        if not result.stdout.strip():
+            self.log(f"OpenCode export returned no JSON for {session_id}: {compact_text(result.stderr, 180)}")
+            return None
+        try:
+            payload = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            self.log(f"OpenCode export JSON parse failed for {session_id}: {exc}")
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def opencode_event_time(self, *values: Any) -> datetime | None:
+        for value in values:
+            if isinstance(value, dict):
+                value = value.get("created") or value.get("updated")
+            timestamp = parse_unix_timestamp(value)
+            if timestamp:
+                return timestamp
+        return None
+
+    def opencode_part_text(self, part: dict[str, Any]) -> str:
+        for key in ("text", "content", "message", "output"):
+            value = part.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return ""
+
+    def append_opencode_event(
+        self,
+        conversations: dict[tuple[str, str], dict[str, Any]],
+        session_id: str,
+        meta: dict[str, Any],
+        timestamp: datetime,
+        event: dict[str, Any],
+        target_date: str | None,
+        all_dates: bool,
+    ) -> None:
+        day = timestamp.date().isoformat()
+        if not all_dates and day != target_date:
+            return
+        key = (day, session_id)
+        if key not in conversations:
+            conversations[key] = {"date": day, "session_id": session_id, "meta": dict(meta), "events": []}
+        event["time"] = timestamp.replace(microsecond=0).isoformat()
+        event["source_file"] = meta.get("source_file", "")
+        conversations[key]["events"].append(event)
+
+    def parse_opencode_export(
+        self,
+        payload: dict[str, Any],
+        source: Path,
+        target_date: str | None,
+        all_dates: bool,
+    ) -> dict[tuple[str, str], dict[str, Any]]:
+        info = payload.get("info") if isinstance(payload.get("info"), dict) else {}
+        session_id = str(info.get("id") or payload.get("id") or source.stem)
+        session_time = self.opencode_event_time(info.get("time"))
+        meta = {
+            "source_file": source.as_posix(),
+            "originator": "OpenCode export",
+            "cwd": str(info.get("directory") or ""),
+            "source": "opencode",
+            "model": "",
+            "title": str(info.get("title") or ""),
+            "created_at": session_time.isoformat() if session_time else "",
+            "version": str(info.get("version") or ""),
+        }
+        conversations: dict[tuple[str, str], dict[str, Any]] = {}
+        messages = payload.get("messages", [])
+        if not isinstance(messages, list):
+            return {}
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            message_info = message.get("info") if isinstance(message.get("info"), dict) else {}
+            message_id = str(message_info.get("id") or message.get("id") or "")
+            role = str(message_info.get("role") or message.get("role") or "").lower()
+            timestamp = self.opencode_event_time(message_info.get("time"), session_time)
+            if not timestamp:
+                continue
+            model = message_info.get("model")
+            if isinstance(model, dict):
+                provider = str(model.get("providerID") or model.get("provider") or "")
+                model_id = str(model.get("modelID") or model.get("model") or "")
+                meta["model"] = "/".join(part for part in (provider, model_id) if part)
+            text_parts: list[str] = []
+            parts = message.get("parts", [])
+            if not isinstance(parts, list):
+                parts = []
+            for part in parts:
+                if not isinstance(part, dict):
+                    continue
+                part_type = str(part.get("type") or "").lower()
+                if part_type == "text":
+                    text = self.opencode_part_text(part)
+                    if text:
+                        text_parts.append(text)
+                elif part_type in {"tool", "tool_call", "tool-call"}:
+                    name = str(part.get("tool") or part.get("name") or part.get("toolID") or "opencode_tool")
+                    event = {
+                        "kind": "tool_call",
+                        "line": part.get("id") or message_id,
+                        "name": name,
+                        "call_id": part.get("id") or part.get("callID"),
+                        "summary": f"opencode tool: {name}",
+                        "arguments": part.get("input") if isinstance(part.get("input"), dict) else {},
+                    }
+                    self.append_opencode_event(conversations, session_id, meta, timestamp, event, target_date, all_dates)
+                elif part_type in {"tool_result", "tool-result"}:
+                    output = self.opencode_part_text(part)
+                    if output:
+                        event = {
+                            "kind": "tool_output",
+                            "line": part.get("id") or message_id,
+                            "call_id": part.get("id") or part.get("callID"),
+                            "output": output,
+                        }
+                        self.append_opencode_event(conversations, session_id, meta, timestamp, event, target_date, all_dates)
+            if role in {"user", "assistant"} and text_parts:
+                event = {
+                    "kind": "message",
+                    "role": role,
+                    "line": message_id,
+                    "text": "\n\n".join(text_parts).strip(),
+                }
+                self.append_opencode_event(conversations, session_id, meta, timestamp, event, target_date, all_dates)
+        return {key: value for key, value in conversations.items() if value.get("events")}
+
+    def read_opencode_sqlite(self, path: Path, target_date: str | None, all_dates: bool) -> dict[tuple[str, str], dict[str, Any]]:
+        conversations: dict[tuple[str, str], dict[str, Any]] = {}
+        uri = f"file:{path.as_posix()}?mode=ro"
+        try:
+            connection = sqlite3.connect(uri, uri=True)
+            connection.row_factory = sqlite3.Row
+        except sqlite3.Error as exc:
+            self.log(f"ERROR cannot open OpenCode DB: {path} ({exc})")
+            return {}
+        try:
+            tables = {
+                row["name"]
+                for row in connection.execute("select name from sqlite_master where type='table'")
+                if row["name"]
+            }
+            required = {"session", "message", "part"}
+            if not required.issubset(tables):
+                self.log(f"ERROR OpenCode DB missing required tables: {sorted(required - tables)}")
+                return {}
+            rows = connection.execute(
+                """
+                select
+                    s.id as session_id,
+                    s.directory,
+                    s.title,
+                    s.version,
+                    s.time_created as session_created,
+                    s.time_updated as session_updated,
+                    m.id as message_id,
+                    m.time_created as message_created,
+                    m.time_updated as message_updated,
+                    m.data as message_data,
+                    p.id as part_id,
+                    p.time_created as part_created,
+                    p.time_updated as part_updated,
+                    p.data as part_data
+                from session s
+                join message m on m.session_id = s.id
+                left join part p on p.message_id = m.id
+                order by s.time_created, m.time_created, p.time_created, p.id
+                """
+            ).fetchall()
+        except sqlite3.Error as exc:
+            self.log(f"ERROR cannot read OpenCode DB: {path} ({exc})")
+            return {}
+        finally:
+            connection.close()
+
+        for row in rows:
+            try:
+                message_data = json.loads(row["message_data"] or "{}")
+            except json.JSONDecodeError:
+                message_data = {}
+            try:
+                part_data = json.loads(row["part_data"] or "{}")
+            except json.JSONDecodeError:
+                part_data = {}
+            if not isinstance(message_data, dict):
+                message_data = {}
+            if not isinstance(part_data, dict):
+                part_data = {}
+            timestamp = self.opencode_event_time(row["part_created"], row["message_created"], row["session_created"])
+            if not timestamp:
+                continue
+            session_id = str(row["session_id"] or "opencode-session")
+            meta = {
+                "source_file": path.as_posix(),
+                "originator": "OpenCode SQLite",
+                "cwd": str(row["directory"] or ""),
+                "source": "opencode",
+                "model": "",
+                "title": str(row["title"] or ""),
+                "version": str(row["version"] or ""),
+            }
+            model = message_data.get("model")
+            if isinstance(model, dict):
+                provider = str(model.get("providerID") or model.get("provider") or "")
+                model_id = str(model.get("modelID") or model.get("model") or "")
+                meta["model"] = "/".join(part for part in (provider, model_id) if part)
+            role = str(message_data.get("role") or "").lower()
+            part_type = str(part_data.get("type") or "").lower()
+            if role in {"user", "assistant"} and (part_type == "text" or not part_type):
+                text = self.opencode_part_text(part_data) or str(message_data.get("content") or "").strip()
+                if text:
+                    event = {
+                        "kind": "message",
+                        "role": role,
+                        "line": row["part_id"] or row["message_id"],
+                        "text": text,
+                    }
+                    self.append_opencode_event(conversations, session_id, meta, timestamp, event, target_date, all_dates)
+            elif part_type in {"tool", "tool_call", "tool-call"}:
+                name = str(part_data.get("tool") or part_data.get("name") or part_data.get("toolID") or "opencode_tool")
+                event = {
+                    "kind": "tool_call",
+                    "line": row["part_id"] or row["message_id"],
+                    "name": name,
+                    "call_id": part_data.get("id") or row["part_id"],
+                    "summary": f"opencode tool: {name}",
+                    "arguments": part_data.get("input") if isinstance(part_data.get("input"), dict) else {},
+                }
+                self.append_opencode_event(conversations, session_id, meta, timestamp, event, target_date, all_dates)
+        return {key: value for key, value in conversations.items() if value.get("events")}
+
+    def read_hermes_export_jsonl(
+        self,
+        text: str,
+        source: str,
+        target_date: str | None,
+        all_dates: bool,
+    ) -> dict[tuple[str, str], dict[str, Any]]:
+        conversations: dict[tuple[str, str], dict[str, Any]] = {}
+        for line_no, line in enumerate(text.splitlines(), start=1):
+            if not line.strip():
+                continue
+            try:
+                session = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(session, dict):
+                continue
+            session_id = str(session.get("id") or f"hermes-export-{line_no}")
+            meta = {
+                "source_file": source,
+                "originator": "Hermes sessions export",
+                "cwd": str(session.get("cwd") or ""),
+                "source": session.get("source") or "hermes",
+                "model": session.get("model") or "",
+                "title": session.get("title") or "",
+                "started_at": session.get("started_at"),
+                "ended_at": session.get("ended_at"),
+            }
+            messages = session.get("messages", [])
+            if not isinstance(messages, list):
+                continue
+            for message in messages:
+                if not isinstance(message, dict):
+                    continue
+                timestamp = parse_unix_timestamp(message.get("timestamp"))
+                if not timestamp:
+                    continue
+                day = timestamp.date().isoformat()
+                if not all_dates and day != target_date:
+                    continue
+                key = (day, session_id)
+                if key not in conversations:
+                    conversations[key] = {"date": day, "session_id": session_id, "meta": dict(meta), "events": []}
+                role = str(message.get("role") or "").lower()
+                content = str(message.get("content") or "").strip()
+                base_event = {
+                    "time": timestamp.replace(microsecond=0).isoformat(),
+                    "line": message.get("id") or line_no,
+                    "source_file": source,
+                }
+                if role in {"user", "assistant"} and content:
+                    event = dict(base_event)
+                    event.update({"kind": "message", "role": role, "text": content})
+                    conversations[key]["events"].append(event)
+                tool_name = str(message.get("tool_name") or "").strip()
+                if tool_name or message.get("tool_calls"):
+                    event = dict(base_event)
+                    event.update(
+                        {
+                            "kind": "tool_call",
+                            "name": tool_name or "hermes_tool",
+                            "call_id": message.get("tool_call_id"),
+                            "summary": f"hermes tool: {tool_name or 'tool call'}",
+                            "arguments": message.get("tool_calls") or {},
+                        }
+                    )
+                    conversations[key]["events"].append(event)
+        return {key: value for key, value in conversations.items() if value.get("events")}
+
+    def read_hermes_export_command(self, target_date: str | None, all_dates: bool) -> dict[tuple[str, str], dict[str, Any]]:
+        try:
+            result = subprocess.run(
+                ["hermes", "sessions", "export", "-"],
+                cwd=str(ROOT),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=120,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            self.log(f"Hermes sessions export unavailable: {exc}")
+            return {}
+        if not result.stdout.strip():
+            if result.stderr.strip():
+                self.log(f"Hermes sessions export returned no data: {compact_text(result.stderr, 180)}")
+            return {}
+        return self.read_hermes_export_jsonl(result.stdout, "hermes sessions export -", target_date, all_dates)
+
     def codex_conversation_markdown(self, conversation: dict[str, Any]) -> str:
         return self.agent_conversation_markdown("codex", conversation)
 
@@ -5795,11 +6919,52 @@ class MemorySync:
         if not all_dates and not target_date:
             target_date = datetime.now().date().isoformat()
         db = self.hermes_state_db()
-        if not db.exists():
-            self.log(f"ERROR Hermes state DB not found: {db}")
+        conversations: dict[tuple[str, str], dict[str, Any]] = {}
+        source_count = 0
+        if db.exists():
+            conversations = self.read_hermes_state_db(db, target_date, all_dates)
+            source_count = 1
+        else:
+            self.log(f"Hermes state DB not found, trying sessions export: {db}")
+        if not conversations:
+            exported = self.read_hermes_export_command(target_date, all_dates)
+            if exported:
+                conversations = exported
+                source_count = max(source_count, 1)
+        if not conversations and not db.exists():
+            self.log(f"ERROR Hermes conversations not found via state DB or sessions export: {db}")
             return 1
-        conversations = self.read_hermes_state_db(db, target_date, all_dates)
-        return self.write_conversation_archive("hermes-agent", conversations, 1)
+        return self.write_conversation_archive("hermes-agent", conversations, source_count or 1)
+
+    def cmd_conversations_scan_opencode(self, target_date: str | None = None, all_dates: bool = False) -> int:
+        if not all_dates and not target_date:
+            target_date = datetime.now().date().isoformat()
+        conversations: dict[tuple[str, str], dict[str, Any]] = {}
+        session_ids = self.opencode_session_ids_from_cli()
+        export_failures = 0
+        for session_id in session_ids:
+            payload = self.opencode_export_session(session_id)
+            if not payload:
+                export_failures += 1
+                continue
+            for key, value in self.parse_opencode_export(
+                payload,
+                Path(f"opencode export {session_id}"),
+                target_date,
+                all_dates,
+            ).items():
+                conversations[key] = value
+        db = self.opencode_db_path()
+        if session_ids and db.exists():
+            for key, value in self.read_opencode_sqlite(db, target_date, all_dates).items():
+                conversations.setdefault(key, value)
+        if not session_ids or (export_failures and not conversations):
+            if not db.exists():
+                self.log(f"ERROR OpenCode DB not found: {db}")
+                return 1
+            conversations = self.read_opencode_sqlite(db, target_date, all_dates)
+            return self.write_conversation_archive("opencode", conversations, 1)
+        return self.write_conversation_archive("opencode", conversations, len(session_ids) + (1 if db.exists() else 0))
 
     def cmd_conversations_probe(self, agent: str) -> int:
         if agent == "hermes-agent":
@@ -5807,7 +6972,9 @@ class MemorySync:
             self.log(f"Hermes state DB: {db} exists={db.exists()}")
             return 0
         if agent == "opencode":
-            self.log("OpenCode conversation scan is not implemented yet; use explicit handoff or configure a transcript path.")
+            db = self.opencode_db_path()
+            self.log(f"OpenCode DB: {db} exists={db.exists()}")
+            self.log("OpenCode conversation scan uses `opencode export <session-id>` first, then read-only SQLite supplement/fallback.")
             return 0
         qoder_paths = [
             self.qoder_home(),
@@ -5834,7 +7001,9 @@ class MemorySync:
             return self.cmd_conversations_scan_openclaw(target_date=target_date, all_dates=all_dates)
         if agent == "hermes-agent":
             return self.cmd_conversations_scan_hermes(target_date=target_date, all_dates=all_dates)
-        if agent in {"opencode", "qoder"}:
+        if agent == "opencode":
+            return self.cmd_conversations_scan_opencode(target_date=target_date, all_dates=all_dates)
+        if agent == "qoder":
             return self.cmd_conversations_probe(agent)
         self.log(f"ERROR conversation scan is not implemented for: {agent}")
         return 1
